@@ -10,7 +10,7 @@ description: |
   Then integration/E2E testing, PR creation, and code review.
 
 polling:
-  model: default
+  model: codex
   timeoutSeconds: 120
 
 agents:
@@ -298,10 +298,11 @@ steps:
       on_exhausted:
         escalate_to: human
 
-  - id: pr
+
+  - id: ship
     agent: developer
     input: |
-      Create a pull request for your changes.
+      Finalize and deliver directly to the branch (NO PR MODE).
 
       TASK:
       {{task}}
@@ -314,76 +315,20 @@ steps:
       PROGRESS LOG:
       {{progress}}
 
-      Create a PR with:
-      - Clear title summarizing the change
-      - Description explaining what and why
-      - Reference to what was tested
-
-      Use: gh pr create
+      Instructions:
+      1. cd into {{repo}} and checkout {{branch}}
+      2. Ensure all intended changes are committed
+      3. Push the branch to origin
+      4. Capture the current commit SHA (`git rev-parse HEAD`)
+      5. Do NOT open or reference pull requests
 
       Reply with:
       STATUS: done
-      PR: URL to the pull request
+      MODE: direct-branch
+      BRANCH: {{branch}}
+      COMMIT: <full sha>
+      PUSH: <success/failure with short detail>
+      SUMMARY: <concise summary of what shipped>
     expects: "STATUS: done"
     on_fail:
       escalate_to: human
-
-  - id: review
-    agent: reviewer
-    input: |
-      Review the pull request.
-
-      PR: {{pr}}
-      TASK: {{task}}
-      CHANGES: {{changes}}
-
-      PROGRESS LOG:
-      {{progress}}
-
-      Review for:
-      - Code quality and clarity
-      - Potential bugs or issues
-      - Test coverage
-      - Follows project conventions
-
-      Use: gh pr view, gh pr diff to read the PR.
-
-      IMPORTANT: Post your review to the PR on GitHub using:
-      - If approving: gh pr review <number> --approve --body "your review summary"
-      - If requesting changes: gh pr review <number> --request-changes --body "your feedback"
-
-      ## Visual Review (Frontend Changes)
-      Has frontend changes: {{has_frontend_changes}}
-
-      If {{has_frontend_changes}} is 'true', you MUST also perform a visual design review:
-      1. Check out the branch: git checkout {{branch}}
-      2. Use the agent-browser skill to open the changed page (file:// URL or local dev server)
-      3. Take a screenshot of the rendered page
-      4. Evaluate visual polish and design quality:
-         - Does the UI look polished and intentional, not rough or placeholder-quality?
-         - Are colors, typography, and spacing consistent with the rest of the project?
-         - Is the layout visually balanced and well-aligned?
-         - Do interactive elements look clickable/tappable?
-         - Is the overall design cohesive — does it feel like part of the same product?
-      5. This is a DESIGN review, not a structural check — the verify step already confirmed elements render. You are checking whether the result looks GOOD.
-      6. Include your visual design assessment in the review output
-
-      If {{has_frontend_changes}} is 'false', skip visual review entirely.
-
-      If changes needed, add comments to the PR explaining what needs to change.
-
-      Reply with:
-      STATUS: done
-      DECISION: approved
-
-      Or if changes needed:
-      STATUS: retry
-      DECISION: changes_requested
-      FEEDBACK:
-      - What needs to change
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: implement
-      max_retries: 3
-      on_exhausted:
-        escalate_to: human

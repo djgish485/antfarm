@@ -1,14 +1,13 @@
 /**
- * Test: polling config in workflow YAML schema
+ * Test: polling/cron config in workflow YAML schema
  *
- * Verifies that WorkflowSpec supports top-level 'polling' config
- * and per-agent 'pollingModel' overrides.
+ * Verifies that WorkflowSpec supports top-level 'polling' config,
+ * per-agent 'pollingModel' overrides, and optional cron.interval_ms overrides.
  */
 
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import YAML from "yaml";
 import { loadWorkflowSpec } from "../dist/installer/workflow-spec.js";
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -90,7 +89,53 @@ steps:
     expects: "CHANGES"
 `;
 
-describe("polling config", () => {
+const WORKFLOW_WITH_CRON_OVERRIDE = `
+id: test-cron
+name: Test Cron
+version: 1
+
+cron:
+  interval_ms: 60000
+
+agents:
+  - id: developer
+    name: Developer Agent
+    workspace:
+      baseDir: agents/developer
+      files:
+        AGENTS.md: agents/developer/AGENTS.md
+
+steps:
+  - id: implement
+    agent: developer
+    input: "Do the work"
+    expects: "CHANGES"
+`;
+
+const WORKFLOW_INVALID_CRON_INTERVAL = `
+id: test-bad-cron
+name: Test Bad Cron
+version: 1
+
+cron:
+  interval_ms: 5000
+
+agents:
+  - id: developer
+    name: Developer Agent
+    workspace:
+      baseDir: agents/developer
+      files:
+        AGENTS.md: agents/developer/AGENTS.md
+
+steps:
+  - id: implement
+    agent: developer
+    input: "Do the work"
+    expects: "CHANGES"
+`;
+
+describe("polling and cron config", () => {
   let tmpDir: string;
 
   before(async () => {
@@ -145,6 +190,26 @@ describe("polling config", () => {
     await assert.rejects(
       () => loadWorkflowSpec(dir),
       /polling\.timeoutSeconds must be positive/
+    );
+  });
+
+  it("parses cron.interval_ms into spec.cron.intervalMs", async () => {
+    const dir = path.join(tmpDir, "with-cron");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "workflow.yml"), WORKFLOW_WITH_CRON_OVERRIDE);
+
+    const spec = await loadWorkflowSpec(dir);
+    assert.equal(spec.cron?.intervalMs, 60000);
+  });
+
+  it("rejects too-small cron.interval_ms", async () => {
+    const dir = path.join(tmpDir, "bad-cron");
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, "workflow.yml"), WORKFLOW_INVALID_CRON_INTERVAL);
+
+    await assert.rejects(
+      () => loadWorkflowSpec(dir),
+      /cron\.interval_ms must be at least 10000ms/
     );
   });
 });

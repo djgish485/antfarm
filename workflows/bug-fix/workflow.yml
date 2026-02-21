@@ -9,7 +9,7 @@ description: |
   PR agent creates the pull request.
 
 polling:
-  model: default
+  model: codex
   timeoutSeconds: 120
 
 agents:
@@ -147,8 +147,9 @@ steps:
 
       Instructions:
       1. cd into the repo
-      2. Create the bugfix branch (git checkout -b {{branch}} from main)
-      3. Read package.json, CI config, test config to understand build/test setup
+      2. If repo is `/opt/the-algo`, read `/opt/the-algo/.antfarm-target-branch` (fallback: current branch) and do NOT switch branches; it must stay on that target branch.
+      3. For non-production repos, create the bugfix branch (git checkout -b {{branch}} from main)
+      4. Read package.json, CI config, test config to understand build/test setup
       4. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
       5. Run the build to establish a baseline
       6. Run the tests to establish a baseline

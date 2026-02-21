@@ -21,8 +21,15 @@ Shorthand used below: `antfarm-cli` means `node ~/.openclaw/workspace/antfarm/di
 | Workflow | Pipeline | Use for |
 |----------|----------|---------|
 | `feature-dev` | plan -> setup -> develop (stories) -> verify -> test -> PR -> review | New features, refactors |
-| `bug-fix` | triage -> investigate -> setup -> fix -> verify -> PR | Bug reports with reproduction steps |
+| `bug-fix-fast` | setup -> fix -> verify | Default bug-fix path for straightforward build/test/lint/typecheck failures (no PR) |
+| `bug-fix` | triage -> investigate -> setup -> fix -> verify -> PR | Deep triage path; use only when user explicitly asks for `bug-fix` |
 | `security-audit` | scan -> prioritize -> setup -> fix -> verify -> test -> PR | Codebase security review |
+
+## Routing Rule (Strict)
+
+- For bug/build/test/lint/typecheck fixes, use `bug-fix-fast` by default.
+- Never start `bug-fix` unless the user explicitly requests `bug-fix` by name.
+- If the user did not explicitly ask for `bug-fix`, do not infer it; run `bug-fix-fast`.
 
 ## Core Commands
 
@@ -66,14 +73,14 @@ Get the user to confirm the plan and acceptance criteria before running.
 
 ## How It Works
 
-- Agents have cron jobs (every 15 min, staggered) that poll for pending steps
+- Agents have cron jobs (every 5 min by default; workflow-specific overrides supported) that poll for pending steps
 - Each agent claims its step, does the work, marks it done, advancing the next step
 - Context passes between steps via KEY: value pairs in agent output
 - No central orchestrator — agents are autonomous
 
 ## Force-Triggering Agents
 
-To skip the 15-min cron wait, use the `cron` tool with `action: "run"` and the agent's job ID. List crons to find them — they're named `antfarm/<workflow-id>/<agent-id>`.
+To skip cron wait, use the `cron` tool with `action: "run"` and the agent's job ID. List crons to find them — they're named `antfarm/<workflow-id>/<agent-id>`.
 
 ## Workflow Management
 

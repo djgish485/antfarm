@@ -3,9 +3,6 @@
  *
  * Guards against test expectations drifting from actual workflow config.
  * See: https://github.com/snarktank/antfarm/issues/124
- *
- * Three tests previously hardcoded timeoutSeconds=30 when the actual
- * workflow YAMLs all specify 120 (DEFAULT_POLLING_TIMEOUT_SECONDS).
  */
 
 import path from "node:path";
@@ -34,11 +31,11 @@ describe("polling timeout consistency across all workflows", () => {
         checked++;
       }
     }
-    assert.ok(checked >= 3, `Expected at least 3 workflows with polling, found ${checked}`);
+    assert.ok(checked >= 4, `Expected at least 4 workflows with polling, found ${checked}`);
   });
 
-  it("bug-fix, feature-dev, and security-audit all use 120s timeout", async () => {
-    const expectedWorkflows = ["bug-fix", "feature-dev", "security-audit"];
+  it("bug-fix, bug-fix-fast, feature-dev, and security-audit all use 120s timeout", async () => {
+    const expectedWorkflows = ["bug-fix", "bug-fix-fast", "feature-dev", "security-audit"];
 
     for (const name of expectedWorkflows) {
       const dir = path.join(WORKFLOWS_DIR, name);

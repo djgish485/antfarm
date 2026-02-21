@@ -1,0 +1,150 @@
+id: bug-fix-fast
+name: Fast Build/Test Fix
+version: 1
+description: |
+  Fast path for straightforward build/test/lint/typecheck breakages.
+  Skips triage and investigation to reduce latency. Setup reproduces the failure,
+  fixer implements a minimal patch, verifier independently confirms the fix.
+
+polling:
+  model: codex
+  timeoutSeconds: 120
+
+cron:
+  interval_ms: 60000
+
+agents:
+  - id: setup
+    name: Setup
+    role: coding
+    description: Prepares branch and reproduces the failing build/test state.
+    workspace:
+      baseDir: agents/setup
+      files:
+        AGENTS.md: ../../agents/shared/setup/AGENTS.md
+        SOUL.md: ../../agents/shared/setup/SOUL.md
+        IDENTITY.md: ../../agents/shared/setup/IDENTITY.md
+
+  - id: fixer
+    name: Fixer
+    role: coding
+    description: Implements the smallest possible fix for the reported failure.
+    workspace:
+      baseDir: agents/fixer
+      files:
+        AGENTS.md: agents/fixer/AGENTS.md
+        SOUL.md: agents/fixer/SOUL.md
+        IDENTITY.md: agents/fixer/IDENTITY.md
+
+  - id: verifier
+    name: Verifier
+    role: verification
+    description: Independently confirms the fix and validates scope.
+    workspace:
+      baseDir: agents/verifier
+      files:
+        AGENTS.md: ../../agents/shared/verifier/AGENTS.md
+        SOUL.md: ../../agents/shared/verifier/SOUL.md
+        IDENTITY.md: ../../agents/shared/verifier/IDENTITY.md
+
+steps:
+  - id: setup
+    agent: setup
+    input: |
+      Prepare for a fast bug fix run.
+
+      BUG / FAILURE REPORT:
+      {{task}}
+
+      Instructions:
+      1. Determine the target repo path from the task. If not explicit, use /opt/the-algo.
+      2. cd into the repo and detect the current branch with `git branch --show-current`.
+      3. For `/opt/the-algo`, read target branch from `/opt/the-algo/.antfarm-target-branch` (fallback: current branch). The active branch MUST equal that target. Do NOT checkout/switch branches.
+      4. For non-production repos, do NOT switch branches unless the task explicitly requests it.
+      5. Detect and record build/test commands from package scripts or project tooling.
+      6. Reproduce the failure by running build/test/lint/typecheck commands relevant to the report.
+      7. Keep output concise and factual.
+
+      Reply with:
+      STATUS: done
+      REPO: /path/to/repo
+      BRANCH: branch-name
+      BUILD_CMD: build command
+      TEST_CMD: test command
+      FAILURE_SUMMARY: short summary of reproduced failure
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: fix
+    agent: fixer
+    input: |
+      Implement a minimal fix for this straightforward failure.
+
+      BUG / FAILURE REPORT:
+      {{task}}
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      FAILURE_SUMMARY: {{failure_summary}}
+
+      VERIFY FEEDBACK (if retrying):
+      {{verify_feedback}}
+
+      Instructions:
+      1. cd into the repo and checkout {{branch}}.
+      2. Implement the smallest fix that resolves the reported failure.
+      3. Add or update a focused regression test where applicable.
+      4. Run {{build_cmd}} and {{test_cmd}}.
+      5. Commit with: fix: resolve <short failure summary>
+
+      Reply with:
+      STATUS: done
+      CHANGES: concise summary of code changes
+      TESTS: what was run and result
+      COMMIT_SHA: full commit SHA
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: verify
+    agent: verifier
+    input: |
+      Verify this fast bugfix is complete and valid.
+
+      BUG / FAILURE REPORT:
+      {{task}}
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      CHANGES: {{changes}}
+      TESTS: {{tests}}
+      COMMIT_SHA: {{commit_sha}}
+
+      Instructions:
+      1. Run: `git show --stat {{commit_sha}}` and `git show {{commit_sha}}`.
+      2. Reject if commit is empty or unrelated to the reported failure.
+      3. Run {{build_cmd}} and {{test_cmd}} to confirm passing state.
+      4. Confirm the failure reported in FAILURE_SUMMARY is addressed.
+      5. Ensure no PR is created in this workflow; branch commit is sufficient.
+
+      Reply with:
+      STATUS: done
+      VERIFIED: what was verified
+
+      Or if incomplete:
+      STATUS: retry
+      ISSUES:
+      - what is missing or wrong
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: fix
+      max_retries: 2
+      on_exhausted:
+        escalate_to: human

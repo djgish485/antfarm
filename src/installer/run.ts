@@ -6,6 +6,39 @@ import { logger } from "../lib/logger.js";
 import { ensureWorkflowCrons } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
 
+
+type ActiveRunRow = {
+  id: string;
+  run_number: number | null;
+  workflow_id: string;
+  task: string;
+  status: string;
+  created_at: string;
+};
+
+const SINGLE_FLIGHT_WORKFLOWS = new Set(["bug-fix", "bug-fix-fast"]);
+const SINGLE_FLIGHT_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+
+function findActiveSingleFlightRun(workflowId: string): ActiveRunRow | null {
+  if (!SINGLE_FLIGHT_WORKFLOWS.has(workflowId)) return null;
+  if (process.env.ANTFARM_ALLOW_PARALLEL_BUGFIX === "1") return null;
+
+  const db = getDb();
+  const row = db.prepare(
+    "SELECT id, run_number, workflow_id, task, status, created_at FROM runs WHERE workflow_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1"
+  ).get(workflowId) as ActiveRunRow | undefined;
+
+  if (!row) return null;
+
+  const createdAtMs = Date.parse(row.created_at);
+  if (Number.isFinite(createdAtMs)) {
+    const ageMs = Date.now() - createdAtMs;
+    if (ageMs > SINGLE_FLIGHT_MAX_AGE_MS) return null;
+  }
+
+  return row;
+}
+
 export async function runWorkflow(params: {
   workflowId: string;
   taskTitle: string;
@@ -14,6 +47,24 @@ export async function runWorkflow(params: {
   const workflowDir = resolveWorkflowDir(params.workflowId);
   const workflow = await loadWorkflowSpec(workflowDir);
   const db = getDb();
+
+  const existingRun = findActiveSingleFlightRun(workflow.id);
+  if (existingRun) {
+    logger.info(`Deduped run request; reusing active run #${existingRun.run_number ?? "?"}`, {
+      workflowId: workflow.id,
+      runId: existingRun.id,
+      stepId: workflow.steps[0]?.id,
+    });
+
+    return {
+      id: existingRun.id,
+      runNumber: existingRun.run_number ?? 0,
+      workflowId: existingRun.workflow_id,
+      task: existingRun.task,
+      status: existingRun.status,
+    };
+  }
+
   const now = new Date().toISOString();
   const runId = crypto.randomUUID();
   const runNumber = nextRunNumber();

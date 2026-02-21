@@ -165,6 +165,19 @@ agents:
 
 If omitted, Antfarm defaults to 30 minutes per agent session.
 
+### Cron Interval Override
+
+You can optionally set a per-workflow cron interval for faster or slower step polling:
+
+```yaml
+cron:
+  interval_ms: 60000
+```
+
+- Default is `300000` (5 minutes) when omitted
+- Minimum supported value is `10000` (10 seconds)
+- Use this for fast workflows where step handoffs should happen quickly
+
 ### Template Variables
 
 Steps communicate through KEY: value pairs in their output. When an agent replies with:

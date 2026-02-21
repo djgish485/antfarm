@@ -88,12 +88,12 @@ The workflow cannot advance until you report. Your session ending without report
 }
 
 const DEFAULT_POLLING_TIMEOUT_SECONDS = 120;
-const DEFAULT_POLLING_MODEL = "default";
+const DEFAULT_POLLING_MODEL = "codex";
 
 export function buildPollingPrompt(workflowId: string, agentId: string, workModel?: string): string {
   const fullAgentId = `${workflowId}_${agentId}`;
   const cli = resolveAntfarmCli();
-  const model = workModel ?? "default";
+  const model = workModel ?? "codex";
   const workPrompt = buildWorkPrompt(workflowId, agentId);
 
   return `Step 1 — Quick check for pending work (lightweight, no side effects):
@@ -122,10 +122,23 @@ ${workPrompt}
 Reply with a short summary of what you spawned.`;
 }
 
+function normalizeEveryMs(workflow: WorkflowSpec): number {
+  const rawEveryMs = workflow.cron?.intervalMs ?? (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
+  const everyMs = Number(rawEveryMs);
+  if (!Number.isFinite(everyMs) || everyMs <= 0) return DEFAULT_EVERY_MS;
+  return Math.floor(everyMs);
+}
+
+function computeAnchorStrideMs(everyMs: number, agentCount: number): number {
+  const safeCount = Math.max(agentCount, 1);
+  // Spread agents inside one interval so stage handoffs can happen quickly on short intervals.
+  return Math.max(5_000, Math.floor(everyMs / safeCount));
+}
+
 export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
   const agents = workflow.agents;
-  // Allow per-workflow cron interval via cron.interval_ms in workflow.yml
-  const everyMs = (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
+  const everyMs = normalizeEveryMs(workflow);
+  const anchorStrideMs = computeAnchorStrideMs(everyMs, agents.length);
 
   // Resolve polling model: per-agent > workflow-level > default
   const workflowPollingModel = workflow.polling?.model ?? DEFAULT_POLLING_MODEL;
@@ -133,7 +146,7 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
 
   for (let i = 0; i < agents.length; i++) {
     const agent = agents[i];
-    const anchorMs = i * 60_000; // stagger by 1 minute each
+    const anchorMs = i * anchorStrideMs;
     const cronName = `antfarm/${workflow.id}/${agent.id}`;
     const agentId = `${workflow.id}_${agent.id}`;
 

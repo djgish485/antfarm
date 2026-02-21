@@ -10,14 +10,13 @@
  */
 
 import path from "node:path";
-import { readFile } from "node:fs/promises";
 import { loadWorkflowSpec } from "../dist/installer/workflow-spec.js";
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 
 const WORKFLOWS_DIR = path.resolve(import.meta.dirname, "..", "workflows");
 
-const WORKFLOW_NAMES = ["bug-fix", "feature-dev", "security-audit"];
+const WORKFLOW_NAMES = ["bug-fix", "bug-fix-fast", "feature-dev", "security-audit"];
 
 describe("polling timeout sync across all workflows", () => {
   for (const name of WORKFLOW_NAMES) {
@@ -30,12 +29,11 @@ describe("polling timeout sync across all workflows", () => {
         typeof spec.polling.timeoutSeconds === "number",
         `${name} polling.timeoutSeconds should be a number`
       );
-      // The loaded spec should reflect the actual YAML value
-      // If this fails, it means the spec loader or the YAML is misconfigured
+      // The loaded spec should reflect the actual YAML value.
       assert.equal(
         spec.polling.timeoutSeconds,
         120,
-        `${name} polling timeout should be 120s (was changed from 30s — see issue #121)`
+        `${name} polling timeout should be 120s`
       );
     });
 
@@ -57,7 +55,7 @@ describe("polling timeout sync across all workflows", () => {
     for (const name of WORKFLOW_NAMES) {
       const dir = path.join(WORKFLOWS_DIR, name);
       const spec = await loadWorkflowSpec(dir);
-      timeouts.add(spec.polling.timeoutSeconds);
+      timeouts.add(spec.polling!.timeoutSeconds!);
     }
     assert.equal(
       timeouts.size,

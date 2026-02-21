@@ -124,6 +124,7 @@ describe("two-phase-integration", () => {
         { id: "feature-dev", agents: ["planner", "developer", "reviewer", "verifier"] },
         { id: "security-audit", agents: ["scanner", "analyst", "remediator"] },
         { id: "bug-fix", agents: ["triager", "fixer", "verifier"] },
+        { id: "bug-fix-fast", agents: ["setup", "fixer", "verifier"] },
       ];
 
       for (const wf of workflows) {

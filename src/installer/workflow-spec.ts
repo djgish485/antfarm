@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import YAML from "yaml";
-import type { LoopConfig, PollingConfig, WorkflowAgent, WorkflowSpec, WorkflowStep } from "./types.js";
+import type { LoopConfig, PollingConfig, WorkflowAgent, WorkflowCronConfig, WorkflowSpec, WorkflowStep } from "./types.js";
 
 export async function loadWorkflowSpec(workflowDir: string): Promise<WorkflowSpec> {
   const filePath = path.join(workflowDir, "workflow.yml");
@@ -22,6 +22,14 @@ export async function loadWorkflowSpec(workflowDir: string): Promise<WorkflowSpe
   if (parsed.polling) {
     validatePollingConfig(parsed.polling, workflowDir);
   }
+
+  // Normalize cron config from either intervalMs or interval_ms
+  const rawCron = (parsed as any).cron;
+  if (rawCron) {
+    parsed.cron = parseCronConfig(rawCron);
+    validateCronConfig(parsed.cron, workflowDir);
+  }
+
   validateAgents(parsed.agents, workflowDir);
   // Parse type/loop from raw YAML before validation
   for (const step of parsed.steps) {
@@ -40,6 +48,23 @@ export async function loadWorkflowSpec(workflowDir: string): Promise<WorkflowSpe
 function validatePollingConfig(polling: PollingConfig, workflowDir: string) {
   if (polling.timeoutSeconds !== undefined && polling.timeoutSeconds <= 0) {
     throw new Error(`workflow.yml polling.timeoutSeconds must be positive in ${workflowDir}`);
+  }
+}
+
+function parseCronConfig(raw: any): WorkflowCronConfig {
+  return {
+    intervalMs: raw.intervalMs ?? raw.interval_ms,
+  };
+}
+
+function validateCronConfig(cron: WorkflowCronConfig, workflowDir: string) {
+  if (cron.intervalMs !== undefined) {
+    if (!Number.isFinite(cron.intervalMs) || cron.intervalMs <= 0) {
+      throw new Error(`workflow.yml cron.interval_ms must be a positive number in ${workflowDir}`);
+    }
+    if (cron.intervalMs < 10_000) {
+      throw new Error(`workflow.yml cron.interval_ms must be at least 10000ms in ${workflowDir}`);
+    }
   }
 }
 

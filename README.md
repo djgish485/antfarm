@@ -48,6 +48,14 @@ Paste a bug report. Get back a fix with a regression test. Triager reproduces it
 triage → investigate → setup → fix → verify → PR
 ```
 
+### bug-fix-fast `3 agents`
+
+For straightforward build/test/lint/typecheck failures where root cause is already clear. Short path, no PR step.
+
+```
+setup → fix → verify
+```
+
 ---
 
 ## Why It Works

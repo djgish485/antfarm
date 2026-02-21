@@ -19,6 +19,12 @@ Commands:
 - Status: \`${CLI} workflow status "<task title>"\`
 - Logs: \`${CLI} logs\`
 
+Workflow routing (strict):
+- \`bug-fix-fast\`: default for all bug/build/test/lint/typecheck fix requests
+- \`bug-fix\`: deep triage flow, use ONLY when the user explicitly requests \`bug-fix\` by name
+- \`feature-dev\`: features/refactors
+- \`security-audit\`: vulnerability scans/remediation
+
 Workflows are self-advancing via per-agent cron jobs. No manual orchestration needed.
 ${WORKFLOW_BLOCK_END}
 `;
@@ -34,6 +40,14 @@ Agent cron jobs are created automatically during install.
 - Start: \`${CLI} workflow run <workflow-id> "<task>"\`
 - Status: \`${CLI} workflow status "<task title>"\`
 - Workflows self-advance via agent cron jobs polling SQLite for pending steps.
+
+## Default Dev Routing (Critical)
+- Start an Antfarm run in the same turn for coding requests.
+- For bug/build/test/lint/typecheck fixes, ALWAYS use \`bug-fix-fast\`.
+- Do NOT use \`bug-fix\` unless the user explicitly says to use \`bug-fix\`.
+- If explicit request is missing, route to \`bug-fix-fast\`.
+- Use \`feature-dev\` for features/refactors and \`security-audit\` for security work.
+- Reply quickly with workflow + run ID. Do not block main chat waiting for completion.
 ${WORKFLOW_BLOCK_END}
 `;
 
