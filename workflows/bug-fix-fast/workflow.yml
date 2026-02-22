@@ -1,6 +1,6 @@
 id: bug-fix-fast
 name: Fast Build/Test Fix
-version: 1
+version: 2
 description: |
   Fast path for straightforward build/test/lint/typecheck breakages.
   Skips triage and investigation to reduce latency. Setup reproduces the failure,
@@ -65,6 +65,15 @@ steps:
       6. Reproduce the failure by running build/test/lint/typecheck commands relevant to the report.
       7. Keep output concise and factual.
 
+      Output contract (machine-parsed, mandatory):
+      - ALWAYS include these exact keys, even when inferred via defaults.
+      - If unknown, use deterministic fallbacks:
+        REPO=/opt/the-algo
+        BRANCH=current branch (or .antfarm-target-branch if present)
+        BUILD_CMD=npm run build
+        TEST_CMD=npm test
+        FAILURE_SUMMARY=one-line summary from observed failure or task text
+
       Reply with:
       STATUS: done
       REPO: /path/to/repo
@@ -72,6 +81,8 @@ steps:
       BUILD_CMD: build command
       TEST_CMD: test command
       FAILURE_SUMMARY: short summary of reproduced failure
+      CHANGES: concise summary of setup findings/actions
+      TESTS: what was run and result
     expects: "STATUS: done"
     max_retries: 2
     on_fail:
@@ -95,14 +106,24 @@ steps:
       {{verify_feedback}}
 
       Instructions:
-      1. cd into the repo and checkout {{branch}}.
-      2. Implement the smallest fix that resolves the reported failure.
-      3. Add or update a focused regression test where applicable.
-      4. Run {{build_cmd}} and {{test_cmd}}.
-      5. Commit with: fix: resolve <short failure summary>
+      1. If any resolved field contains a token like `[missing: ...]`, self-heal before coding:
+         - REPO: extract from task text; fallback /opt/the-algo.
+         - BRANCH: use `cat <repo>/.antfarm-target-branch` when present, else `git -C <repo> branch --show-current`.
+         - BUILD_CMD: prefer package.json build script; fallback `npm run build`.
+         - TEST_CMD: prefer package.json test script; fallback `npm test`.
+         - FAILURE_SUMMARY: derive a one-line summary from task text and observed behavior.
+      2. cd into the repo and checkout the resolved branch.
+      3. Implement the smallest fix that resolves the reported failure.
+      4. Add or update a focused regression test where applicable.
+      5. Run the resolved build/test commands.
+      6. Commit with: fix: resolve <short failure summary>
 
       Reply with:
       STATUS: done
+      REPO: resolved repo path
+      BRANCH: resolved branch name
+      BUILD_CMD: resolved build command
+      TEST_CMD: resolved test command
       CHANGES: concise summary of code changes
       TESTS: what was run and result
       COMMIT_SHA: full commit SHA
@@ -128,11 +149,12 @@ steps:
       COMMIT_SHA: {{commit_sha}}
 
       Instructions:
-      1. Run: `git show --stat {{commit_sha}}` and `git show {{commit_sha}}`.
-      2. Reject if commit is empty or unrelated to the reported failure.
-      3. Run {{build_cmd}} and {{test_cmd}} to confirm passing state.
-      4. Confirm the failure reported in FAILURE_SUMMARY is addressed.
-      5. Ensure no PR is created in this workflow; branch commit is sufficient.
+      1. If any field includes `[missing: ...]`, resolve it using the same fallback rules as the fixer before verification.
+      2. Run: `git show --stat {{commit_sha}}` and `git show {{commit_sha}}`.
+      3. Reject if commit is empty or unrelated to the reported failure.
+      4. Run the resolved build/test commands to confirm passing state.
+      5. Confirm the failure reported in FAILURE_SUMMARY is addressed.
+      6. Ensure no PR is created in this workflow; branch commit is sufficient.
 
       Reply with:
       STATUS: done
