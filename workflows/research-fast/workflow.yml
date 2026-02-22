@@ -1,0 +1,142 @@
+id: research-fast
+name: Fast Research Workflow
+version: 1
+description: |
+  Lightweight research pipeline for quick investigation tasks.
+  Steps: research -> synthesize -> verify.
+
+polling:
+  model: codex
+  timeoutSeconds: 120
+
+cron:
+  interval_ms: 20000
+
+agents:
+  - id: rfresearch
+    name: Researcher
+    role: analysis
+    description: Collects concrete findings and evidence for the task.
+    workspace:
+      baseDir: agents/researcher
+      files:
+        AGENTS.md: agents/researcher/AGENTS.md
+        SOUL.md: agents/researcher/SOUL.md
+        IDENTITY.md: agents/researcher/IDENTITY.md
+
+  - id: rfsynthesize
+    name: Synthesizer
+    role: analysis
+    description: Turns findings into concise conclusions and recommended actions.
+    workspace:
+      baseDir: agents/synthesizer
+      files:
+        AGENTS.md: agents/synthesizer/AGENTS.md
+        SOUL.md: agents/synthesizer/SOUL.md
+        IDENTITY.md: agents/synthesizer/IDENTITY.md
+
+  - id: rfverify
+    name: Verifier
+    role: verification
+    description: Checks output completeness and internal consistency.
+    workspace:
+      baseDir: agents/verifier
+      files:
+        AGENTS.md: agents/verifier/AGENTS.md
+        SOUL.md: agents/verifier/SOUL.md
+        IDENTITY.md: agents/verifier/IDENTITY.md
+
+steps:
+  - id: research
+    agent: rfresearch
+    input: |
+      Research this task and collect evidence-backed findings.
+
+      TASK:
+      {{task}}
+
+      Instructions:
+      1. Investigate directly in the target repo/system as requested.
+      2. Use concrete evidence (commands, logs, code references).
+      3. Keep findings concise and factual.
+      4. Do not invent data.
+
+      Output contract (strict):
+      Reply with:
+      STATUS: done
+      FINDINGS:
+      - bullet findings
+      EVIDENCE:
+      - command/log/code refs
+      RISKS:
+      - optional bullets (or "none")
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: synthesize
+    agent: rfsynthesize
+    input: |
+      Synthesize the research findings into clear conclusions and next actions.
+
+      TASK:
+      {{task}}
+
+      FINDINGS:
+      {{findings}}
+
+      EVIDENCE:
+      {{evidence}}
+
+      RISKS:
+      {{risks}}
+
+      Instructions:
+      1. Preserve factual accuracy.
+      2. Separate confirmed facts from assumptions.
+      3. Produce actionable recommendations.
+
+      Output contract (strict):
+      Reply with:
+      STATUS: done
+      SUMMARY: concise synthesis
+      RECOMMENDATIONS:
+      - ordered action bullets
+      ASSUMPTIONS:
+      - optional bullets (or "none")
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
+
+  - id: verify
+    agent: rfverify
+    input: |
+      Verify completeness and consistency of synthesized research output.
+
+      TASK:
+      {{task}}
+
+      SUMMARY:
+      {{summary}}
+
+      RECOMMENDATIONS:
+      {{recommendations}}
+
+      ASSUMPTIONS:
+      {{assumptions}}
+
+      Instructions:
+      1. Confirm required output fields are present and non-empty.
+      2. Confirm recommendations align with summary.
+      3. Flag contradictions or missing critical details.
+
+      Output contract (strict):
+      Reply with:
+      STATUS: done
+      VERIFIED: what was checked and final verdict
+    expects: "STATUS: done"
+    max_retries: 2
+    on_fail:
+      escalate_to: human
