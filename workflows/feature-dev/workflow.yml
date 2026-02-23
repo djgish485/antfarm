@@ -2,7 +2,7 @@
 # session with clean context. Memory persists via git history and progress files.
 id: feature-dev
 name: Feature Development Workflow
-version: 7
+version: 8
 description: |
   Story-based execution pipeline. Planner decomposes tasks into user stories.
   Setup prepares the environment and establishes baseline.
@@ -69,6 +69,8 @@ agents:
     description: Integration and E2E testing after all stories are implemented.
     workspace:
       baseDir: agents/tester
+      skills:
+        - agent-browser
       files:
         AGENTS.md: agents/tester/AGENTS.md
         SOUL.md: agents/tester/SOUL.md
@@ -313,7 +315,7 @@ steps:
          - If BUILD_CMD/TEST_CMD are missing, use npm run build / npm test.
       1. Run the full test suite ({{test_cmd}}) to confirm everything passes together.
       2. Look for integration issues between stories.
-      3. If this is a UI feature, use agent-browser for a quick end-to-end sanity check.
+      3. If this changes frontend/UI behavior, run agent-browser sanity flow: load app, open one feed item, verify post detail renders without an application error, and if source chips/filters are present click one and verify UI response. If browser tooling is unavailable, return STATUS: retry with FAILURES explaining why.
       4. Check cross-cutting concerns: error handling, edge cases across features.
       5. Verify the overall feature works as a cohesive whole.
 
@@ -489,6 +491,39 @@ steps:
       STATUS: retry
       DEPLOY_FAILURE_SIGNATURE: <signature>
       DEPLOY_ERROR_JSON: <json>
+      ISSUES: <short summary>
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: stabilize
+      max_retries: 2
+      on_exhausted:
+        escalate_to: bug-fix-fast
+
+  - id: browser-smoke
+    agent: verifier
+    input: |
+      Run browser-level smoke validation for the merged deployment.
+
+      TASK:
+      {{task}}
+
+      MAIN_COMMIT: {{main_commit}}
+      MERGED_BRANCH: {{merged_branch}}
+
+      Instructions:
+      1. Use agent-browser to open https://algo2.dangish.net (or fallback http://127.0.0.1:3000 if access is blocked in-session).
+      2. Confirm the feed screen renders.
+      3. Click one feed item and confirm post detail opens without "Application error".
+      4. If source chips/filters are present, click one and verify the UI responds (filter state/count/list changes).
+      5. If browser tooling is unavailable, return STATUS: retry with ISSUES describing the tooling failure.
+
+      Reply with (success):
+      STATUS: done
+      BROWSER_SMOKE: pass
+      NOTES: <what was clicked and verified>
+
+      Or on failure:
+      STATUS: retry
       ISSUES: <short summary>
     expects: "STATUS: done"
     on_fail:

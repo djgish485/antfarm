@@ -296,8 +296,10 @@ function renderBoard(wf, runs) {
           const badge = `badge-${run.status}`;
           const time = run.updated_at ? parseTS(run.updated_at)?.toLocaleString() || "" : '';
           const title = run.task.length > 60 ? run.task.slice(0, 57) + '…' : run.task;
+          const runRef = run.run_number ? `#${run.run_number}` : run.id.slice(0, 8);
+          const titleWithRef = `[${runRef}] ${title}`;
           return `<div class="card ${cls}" onclick="openRun('${run.id}')">
-            <div class="card-title" title="${run.task.replace(/"/g, '&quot;')}">${title}</div>
+            <div class="card-title" title="${run.task.replace(/"/g, '&quot;')}">${titleWithRef}</div>
             <div class="card-meta">
               <span class="badge ${badge}">${run.status}</span>
               <span>${time}</span>
@@ -341,7 +343,7 @@ async function openRun(id) {
   }).join('');
   panel.innerHTML = `
     <button class="panel-close" onclick="closePanel()">✕</button>
-    <h2>${run.workflow_id}</h2>
+    <h2>${run.workflow_id} <span style="font-size:12px;color:var(--text-secondary);font-family:'Geist Mono',monospace">${run.run_number ? `#${run.run_number}` : run.id.slice(0,8)}</span></h2>
     <div class="panel-task">${esc(run.task)}</div>
     <div class="panel-meta">
       <span><span class="badge badge-${run.status}">${run.status}</span></span>

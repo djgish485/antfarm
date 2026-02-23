@@ -1,6 +1,6 @@
 id: bug-fix-fast
 name: Fast Build/Test Fix
-version: 5
+version: 6
 description: |
   Fast path for straightforward build/test/lint/typecheck breakages.
   Skips triage and investigation to reduce latency. Setup reproduces the failure,
@@ -43,6 +43,8 @@ agents:
     description: Independently confirms the fix and validates scope.
     workspace:
       baseDir: agents/verifier
+      skills:
+        - agent-browser
       files:
         AGENTS.md: ../../agents/shared/verifier/AGENTS.md
         SOUL.md: ../../agents/shared/verifier/SOUL.md
@@ -167,6 +169,7 @@ steps:
       4. Run the resolved build/test commands to confirm passing state.
       5. Confirm the failure reported in FAILURE_SUMMARY is addressed.
       6. Ensure no PR is created in this workflow; branch commit is sufficient.
+      7. If the fix changes frontend/UI behavior, run agent-browser sanity flow: load app, open one feed item/post detail, and if source chips/filters are present click one and verify UI response. If browser tooling is unavailable, return STATUS: retry with ISSUES explaining why.
 
       Reply with:
       STATUS: done
@@ -176,6 +179,39 @@ steps:
       STATUS: retry
       ISSUES:
       - what is missing or wrong
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: fix
+      max_retries: 2
+      on_exhausted:
+        escalate_to: human
+
+  - id: browser-smoke
+    agent: verifier
+    input: |
+      Run browser-level smoke validation after live-smoke for this bugfix run.
+
+      TASK:
+      {{task}}
+
+      MAIN_COMMIT: {{main_commit}}
+      MERGED_BRANCH: {{merged_branch}}
+
+      Instructions:
+      1. Use agent-browser to open https://algo2.dangish.net (or fallback http://127.0.0.1:3000 if access is blocked in-session).
+      2. Confirm feed screen renders.
+      3. Click one feed item and confirm post detail opens without "Application error".
+      4. If source chips/filters are present, click one and verify the UI responds (filter state/count/list changes).
+      5. If browser tooling is unavailable, return STATUS: retry with ISSUES describing the tooling failure.
+
+      Reply with (success):
+      STATUS: done
+      BROWSER_SMOKE: pass
+      NOTES: <what was clicked and verified>
+
+      Or on failure:
+      STATUS: retry
+      ISSUES: <short summary>
     expects: "STATUS: done"
     on_fail:
       retry_step: fix
