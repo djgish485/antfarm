@@ -8,6 +8,7 @@ import { execSync, execFileSync } from "node:child_process";
 import { teardownWorkflowCronsIfIdle } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
+import { cleanupRunWorkspace } from "./workspace-cleanup.js";
 import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { isFrontendChange } from "../lib/frontend-detect.js";
 import { resolveAntfarmCli } from "./paths.js";
@@ -238,6 +239,7 @@ function handleSingleStepRetry(
     ).run(step.run_id);
 
     const wfId = getWorkflowId(step.run_id);
+    if (wfId) try { cleanupRunWorkspace(step.run_id, wfId); } catch {}
     const escalatedRunId = maybeEscalateOnExhausted(step, context, output);
     const failDetail = escalatedRunId
       ? `Step retries exhausted. Escalated to ${step.on_exhausted_workflow} (${escalatedRunId}).`
@@ -1108,6 +1110,7 @@ function advancePipeline(runId: string): { advanced: boolean; runCompleted: bool
     logger.info("Run completed", { runId, workflowId: wfId });
     archiveRunProgress(runId);
     scheduleRunCronTeardown(runId);
+    if (wfId) try { cleanupRunWorkspace(runId, wfId); } catch {}
     return { advanced: false, runCompleted: true };
   }
 }

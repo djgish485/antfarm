@@ -101,6 +101,8 @@ function printUsage() {
       "antfarm workflow stop <run-id>        Stop/cancel a running workflow",
       "antfarm workflow ensure-crons <name>  Recreate agent crons for a workflow",
       "",
+      "antfarm cleanup [--dry-run]             Clean workspaces for completed/cancelled/failed runs",
+      "",
       "antfarm dashboard [start] [--port N]   Start dashboard daemon (default: 3333)",
       "antfarm dashboard stop                  Stop dashboard daemon",
       "antfarm dashboard status                Check dashboard status",
@@ -222,6 +224,16 @@ async function main() {
       }
     } else {
       console.log("\nDashboard already running.");
+    }
+    return;
+  }
+
+  if (group === "cleanup") {
+    const { cleanupAllTerminalWorkspaces } = await import("../installer/workspace-cleanup.js");
+    const dryRun = args.includes("--dry-run");
+    const { freed, cleaned } = cleanupAllTerminalWorkspaces(dryRun);
+    if (cleaned === 0) {
+      console.log("Nothing to clean up.");
     }
     return;
   }

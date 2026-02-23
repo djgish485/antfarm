@@ -1,6 +1,7 @@
 import { getDb } from "../db.js";
 import { teardownWorkflowCronsIfIdle } from "./agent-cron.js";
 import { emitEvent } from "./events.js";
+import { cleanupRunWorkspace } from "./workspace-cleanup.js";
 
 export type RunInfo = {
   id: string;
@@ -122,6 +123,9 @@ export async function stopWorkflow(query: string): Promise<StopWorkflowResult> {
 
   // Clean up cron jobs if no other active runs
   await teardownWorkflowCronsIfIdle(run.workflow_id);
+
+  // Clean up run workspace
+  try { cleanupRunWorkspace(run.id, run.workflow_id); } catch {}
 
   // Emit event
   emitEvent({
