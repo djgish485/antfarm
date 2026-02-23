@@ -16,27 +16,92 @@ type ActiveRunRow = {
   created_at: string;
 };
 
-const SINGLE_FLIGHT_WORKFLOWS = new Set(["bug-fix", "bug-fix-fast"]);
-const SINGLE_FLIGHT_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+type ActiveRunMatch = {
+  run: ActiveRunRow;
+  dedupeKey: string;
+};
 
-function findActiveSingleFlightRun(workflowId: string): ActiveRunRow | null {
-  if (!SINGLE_FLIGHT_WORKFLOWS.has(workflowId)) return null;
+const DEDUPE_WORKFLOWS = new Set(["bug-fix", "bug-fix-fast"]);
+const DEDUPE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
+const DEDUPE_SCAN_LIMIT = 30;
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractRepo(task: string): string {
+  const m = task.match(/\brepo:\s*([^\s,;\n]+)/i);
+  return m?.[1]?.trim().toLowerCase() || "unknown-repo";
+}
+
+function extractBranch(task: string): string {
+  const m =
+    task.match(/\bbranch:\s*([\w./-]+)/i) ||
+    task.match(/\bon\s+branch\s+([\w./-]+)/i);
+  return m?.[1]?.trim().toLowerCase() || "unknown-branch";
+}
+
+function extractIncidentText(task: string): string {
+  const lines = task
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    if (/^(repo|branch|task|acceptance criteria|requirements|constraints)\b/i.test(line)) {
+      continue;
+    }
+    if (/^\[[ xX]\]/.test(line)) {
+      continue;
+    }
+
+    return line
+      .replace(/^repo:\s*[^\n]+?\bon\s+branch\s+[\w./-]+\.?\s*/i, "")
+      .replace(/^repo:\s*[^\n]+\.?\s*/i, "")
+      .trim();
+  }
+
+  return lines[0] || task;
+}
+
+function buildBugfixDedupeKey(task: string): string {
+  const repo = extractRepo(task);
+  const branch = extractBranch(task);
+  const incident = normalizeWhitespace(extractIncidentText(task).toLowerCase())
+    .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "<id>")
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, "<date>")
+    .replace(/\brun\s*#?\d+\b/gi, "run")
+    .replace(/\b\d{1,6}\b/g, "#")
+    .slice(0, 220);
+
+  return `${repo}|${branch}|${incident}`;
+}
+
+function findActiveDedupedBugfixRun(workflowId: string, taskTitle: string): ActiveRunMatch | null {
+  if (!DEDUPE_WORKFLOWS.has(workflowId)) return null;
   if (process.env.ANTFARM_ALLOW_PARALLEL_BUGFIX === "1") return null;
 
   const db = getDb();
-  const row = db.prepare(
-    "SELECT id, run_number, workflow_id, task, status, created_at FROM runs WHERE workflow_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT 1"
-  ).get(workflowId) as ActiveRunRow | undefined;
+  const requestKey = buildBugfixDedupeKey(taskTitle);
 
-  if (!row) return null;
+  const rows = db.prepare(
+    "SELECT id, run_number, workflow_id, task, status, created_at FROM runs WHERE workflow_id = ? AND status = 'running' ORDER BY created_at DESC LIMIT ?"
+  ).all(workflowId, DEDUPE_SCAN_LIMIT) as ActiveRunRow[];
 
-  const createdAtMs = Date.parse(row.created_at);
-  if (Number.isFinite(createdAtMs)) {
-    const ageMs = Date.now() - createdAtMs;
-    if (ageMs > SINGLE_FLIGHT_MAX_AGE_MS) return null;
+  for (const row of rows) {
+    const createdAtMs = Date.parse(row.created_at);
+    if (Number.isFinite(createdAtMs)) {
+      const ageMs = Date.now() - createdAtMs;
+      if (ageMs > DEDUPE_MAX_AGE_MS) continue;
+    }
+
+    const rowKey = buildBugfixDedupeKey(row.task || "");
+    if (rowKey === requestKey) {
+      return { run: row, dedupeKey: requestKey };
+    }
   }
 
-  return row;
+  return null;
 }
 
 export async function runWorkflow(params: {
@@ -48,9 +113,11 @@ export async function runWorkflow(params: {
   const workflow = await loadWorkflowSpec(workflowDir);
   const db = getDb();
 
-  const existingRun = findActiveSingleFlightRun(workflow.id);
-  if (existingRun) {
-    logger.info(`Deduped run request; reusing active run #${existingRun.run_number ?? "?"}`, {
+  const existingRunMatch = findActiveDedupedBugfixRun(workflow.id, params.taskTitle);
+  if (existingRunMatch) {
+    const existingRun = existingRunMatch.run;
+
+    logger.info(`Deduped run request by incident key; reusing active run #${existingRun.run_number ?? "?"}`, {
       workflowId: workflow.id,
       runId: existingRun.id,
       stepId: workflow.steps[0]?.id,
