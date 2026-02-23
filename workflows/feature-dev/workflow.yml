@@ -2,7 +2,7 @@
 # session with clean context. Memory persists via git history and progress files.
 id: feature-dev
 name: Feature Development Workflow
-version: 6
+version: 7
 description: |
   Story-based execution pipeline. Planner decomposes tasks into user stories.
   Setup prepares the environment and establishes baseline.
@@ -457,6 +457,46 @@ steps:
     on_fail:
       escalate_to: human
 
+  - id: deploy-live
+    agent: developer
+    input: |
+      Deploy the merged main commit to the live runtime checkout before smoke.
+
+      TASK:
+      {{task}}
+
+      MAIN_COMMIT: {{main_commit}}
+      MERGED_BRANCH: {{merged_branch}}
+
+      Instructions:
+      1. Run:
+         python3 /root/.openclaw/workspace/antfarm/scripts/deploy-live.py \
+           --repo /opt/the-algo \
+           --remote origin \
+           --branch main \
+           --service the-algo \
+           --expected-sha {{main_commit}} \
+           --origin-url http://127.0.0.1:3000 \
+           --json-out /tmp/antfarm-deploy-live-{{run_id}}.json
+      2. If script exits 0: return STATUS: done and include DEPLOY_RESULT_JSON.
+      3. If script exits non-zero: return STATUS: retry and include DEPLOY_FAILURE_SIGNATURE, DEPLOY_ERROR_JSON, and ISSUES.
+
+      Reply with (success):
+      STATUS: done
+      DEPLOY_RESULT_JSON: <json>
+
+      Or on failure:
+      STATUS: retry
+      DEPLOY_FAILURE_SIGNATURE: <signature>
+      DEPLOY_ERROR_JSON: <json>
+      ISSUES: <short summary>
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: stabilize
+      max_retries: 2
+      on_exhausted:
+        escalate_to: bug-fix-fast
+
   - id: live-smoke
     agent: verifier
     input: |
@@ -467,6 +507,7 @@ steps:
 
       MAIN_COMMIT: {{main_commit}}
       MERGED_BRANCH: {{merged_branch}}
+      DEPLOY_RESULT_JSON: {{deploy_result_json}}
 
       Instructions:
       1. Run:
