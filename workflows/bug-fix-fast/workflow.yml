@@ -169,7 +169,7 @@ steps:
       4. Run the resolved build/test commands to confirm passing state.
       5. Confirm the failure reported in FAILURE_SUMMARY is addressed.
       6. Ensure no PR is created in this workflow; branch commit is sufficient.
-      7. If the fix changes frontend/UI behavior, run agent-browser sanity flow: load app, open one feed item/post detail, and if source chips/filters are present click one and verify UI response. If browser tooling is unavailable, return STATUS: retry with ISSUES explaining why.
+      7. If the fix changes frontend/UI behavior, run a LOCAL browser smoke test using headless Chromium + puppeteer-core against http://127.0.0.1:3000 (NOT the public URL which requires Cloudflare auth). puppeteer-core is installed in the repo as a devDependency; chromium is at /snap/bin/chromium. Write a small node script that launches headless chromium, loads http://127.0.0.1:3000, waits for content, checks for JS errors, and if source filter buttons exist clicks them to verify filtering works. Do NOT use the agent browser tool or the public https URL. If chromium or puppeteer-core is unavailable, skip with a note (do not retry).
 
       Reply with:
       STATUS: done
@@ -198,11 +198,13 @@ steps:
       MERGED_BRANCH: {{merged_branch}}
 
       Instructions:
-      1. Use agent-browser to open https://algo2.dangish.net (or fallback http://127.0.0.1:3000 if access is blocked in-session).
-      2. Confirm feed screen renders.
-      3. Click one feed item and confirm post detail opens without "Application error".
-      4. If source chips/filters are present, click one and verify the UI responds (filter state/count/list changes).
-      5. If browser tooling is unavailable, return STATUS: retry with ISSUES describing the tooling failure.
+      1. Run a LOCAL headless browser test against http://127.0.0.1:3000 using puppeteer-core (installed in repo as devDependency) and chromium at /snap/bin/chromium. Do NOT use the public https://algo2.dangish.net URL (requires Cloudflare auth). Do NOT use the agent browser tool.
+      2. Write a small node script (ESM) that: imports puppeteer from the repo's node_modules/puppeteer-core, launches chromium headless with --no-sandbox, navigates to http://127.0.0.1:3000, waits for networkidle2 + 3s for React hydration.
+      3. Confirm feed screen renders (check article count > 0).
+      4. Click one feed item and confirm post detail opens without "Application error".
+      5. If source filter buttons exist, click "Twitter" and verify items are filtered, then click "All sources" to reset.
+      6. Collect any page errors. Report results.
+      7. If chromium or puppeteer-core is unavailable, return STATUS: done with BROWSER_SMOKE: skipped (do not retry).
 
       Reply with (success):
       STATUS: done

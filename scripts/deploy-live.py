@@ -7,10 +7,14 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
+import pathlib
+import re
 import subprocess
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from typing import Any, Dict, List
 
 
@@ -137,6 +141,111 @@ def collect_logs(service: str) -> Dict[str, str]:
 
 def append_check(report: Dict[str, Any], check: Dict[str, Any]) -> None:
     report.setdefault("checks", []).append(check)
+
+
+def parse_origin_port(origin_url: str) -> int:
+    try:
+        parsed = urlparse(origin_url)
+    except Exception:
+        return 3000
+    if parsed.port:
+        return int(parsed.port)
+    return 443 if parsed.scheme == "https" else 80
+
+
+def pids_listening_on_port(port: int) -> List[int]:
+    try:
+        proc = subprocess.run(
+            ["ss", "-ltnp"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except Exception:
+        return []
+    pids: set[int] = set()
+    port_token = f":{port}"
+    for line in (proc.stdout or "").splitlines():
+        if port_token not in line:
+            continue
+        for m in re.finditer(r"pid=(\d+)", line):
+            try:
+                pids.add(int(m.group(1)))
+            except Exception:
+                continue
+    return sorted(pids)
+
+
+def _read_proc_cmdline(pid: int) -> str:
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as handle:
+            raw = handle.read().replace(b"\x00", b" ").decode("utf-8", errors="replace")
+            return one_line(raw, 300)
+    except Exception:
+        return ""
+
+
+def _read_proc_cwd(pid: int) -> str:
+    try:
+        return os.path.realpath(f"/proc/{pid}/cwd")
+    except Exception:
+        return ""
+
+
+def _pid_exists(pid: int) -> bool:
+    return os.path.exists(f"/proc/{pid}")
+
+
+def clear_run_workspace_port_owners(port: int) -> Dict[str, Any]:
+    listeners = pids_listening_on_port(port)
+    details: List[Dict[str, Any]] = []
+
+    for pid in listeners:
+        cwd = _read_proc_cwd(pid)
+        cmd = _read_proc_cmdline(pid)
+        is_run_workspace = "/root/.openclaw/workspaces/workflows/" in cwd
+        entry: Dict[str, Any] = {
+            "pid": pid,
+            "cwd": cwd,
+            "cmd": cmd,
+            "run_workspace": is_run_workspace,
+        }
+        if not is_run_workspace:
+            details.append(entry)
+            continue
+
+        try:
+            os.kill(pid, 15)
+            entry["term_sent"] = True
+        except Exception as exc:
+            entry["term_error"] = one_line(f"{type(exc).__name__}: {exc}", 180)
+
+        time.sleep(0.6)
+        if _pid_exists(pid):
+            try:
+                os.kill(pid, 9)
+                entry["kill_sent"] = True
+            except Exception as exc:
+                entry["kill_error"] = one_line(f"{type(exc).__name__}: {exc}", 180)
+
+        time.sleep(0.2)
+        entry["still_alive"] = _pid_exists(pid)
+        details.append(entry)
+
+    remaining = []
+    for pid in pids_listening_on_port(port):
+        cwd = _read_proc_cwd(pid)
+        if "/root/.openclaw/workspaces/workflows/" in cwd:
+            remaining.append({"pid": pid, "cwd": cwd, "cmd": _read_proc_cmdline(pid)})
+
+    return {
+        "ok": len(remaining) == 0,
+        "port": port,
+        "listeners_before": listeners,
+        "details": details,
+        "remaining_run_workspace_listeners": remaining,
+    }
 
 
 def fail(report: Dict[str, Any], err_type: str, message: str, failed_check: str, service: str) -> int:
@@ -280,9 +389,6 @@ def main() -> int:
         return finish(report, args.json_out, code)
 
     # Rebuild if the .next build is stale (BUILD_ID timestamp < latest commit)
-    import os
-    import pathlib
-
     next_dir = pathlib.Path(args.repo) / ".next"
     build_id_path = next_dir / "BUILD_ID"
     needs_build = True
@@ -333,6 +439,27 @@ def main() -> int:
                 "reason": "build is newer than HEAD commit",
             },
         )
+
+    guard = clear_run_workspace_port_owners(parse_origin_port(args.origin_url))
+    append_check(
+        report,
+        {
+            "name": "port_guard",
+            "ok": guard.get("ok", False),
+            "port": guard.get("port"),
+            "listeners_before": guard.get("listeners_before", []),
+            "remaining": guard.get("remaining_run_workspace_listeners", []),
+        },
+    )
+    if not guard.get("ok", False):
+        code = fail(
+            report,
+            "port_guard_failed",
+            f"run-workspace listener still owns origin port {guard.get('port')}",
+            "port_guard",
+            args.service,
+        )
+        return finish(report, args.json_out, code)
 
     restart = run_cmd(["systemctl", "restart", args.service], args.command_timeout)
     append_check(
