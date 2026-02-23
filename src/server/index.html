@@ -369,6 +369,7 @@ function formatEventDesc(evt) {
     case 'step.done': return `Step completed`;
     case 'step.failed': return `Step failed` + (evt.detail ? `: ${evt.detail.slice(0,80)}` : '');
     case 'step.timeout': return `Step timed out` + (evt.detail ? ` — ${evt.detail}` : '');
+    case 'step.retry': return `Step retry` + (evt.detail ? ` — ${evt.detail.slice(0,80)}` : '');
     case 'story.started': return `Claimed story ${story}`;
     case 'story.done': return `Completed ${story}`;
     case 'story.verified': return `Verified ${story} ✅`;

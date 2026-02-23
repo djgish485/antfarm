@@ -76,6 +76,8 @@ def load_state(path: Path) -> Dict[str, Any]:
             "started_sent": {},
             "terminal_sent": {},
             "stalled_sent": {},
+            "smoke_retry_sent": {},
+            "escalation_sent": {},
         }
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -85,6 +87,8 @@ def load_state(path: Path) -> Dict[str, Any]:
             "started_sent": {},
             "terminal_sent": {},
             "stalled_sent": {},
+            "smoke_retry_sent": {},
+            "escalation_sent": {},
         }
     if not isinstance(data, dict):
         return {
@@ -92,8 +96,10 @@ def load_state(path: Path) -> Dict[str, Any]:
             "started_sent": {},
             "terminal_sent": {},
             "stalled_sent": {},
+            "smoke_retry_sent": {},
+            "escalation_sent": {},
         }
-    for key in ("started_sent", "terminal_sent", "stalled_sent"):
+    for key in ("started_sent", "terminal_sent", "stalled_sent", "smoke_retry_sent", "escalation_sent"):
         if not isinstance(data.get(key), dict):
             data[key] = {}
     if not isinstance(data.get("bootstrapped"), bool):
@@ -268,6 +274,35 @@ def stalled_message(row: sqlite3.Row, minutes_running: int) -> str:
     return f"[Antfarm] Running {minutes_running}m: {label}. Task: {task}"
 
 
+def parse_context(raw: object) -> Dict[str, str]:
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        value = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in value.items():
+        if isinstance(k, str) and isinstance(v, (str, int, float, bool)):
+            out[k] = str(v)
+    return out
+
+
+def smoke_retry_message(row: sqlite3.Row, retry_count: int, detail: str) -> str:
+    label = run_label(row["run_number"], row["workflow_id"], row["id"])
+    suffix = f" {detail}" if detail else ""
+    return f"[Antfarm] Live smoke failed on {label}; retry {retry_count}/2 started.{suffix}".strip()
+
+
+def escalation_message(row: sqlite3.Row, ctx: Dict[str, str]) -> str:
+    label = run_label(row["run_number"], row["workflow_id"], row["id"])
+    target = ctx.get("escalation_workflow", "unknown-workflow")
+    target_run = ctx.get("escalation_run_id", "unknown-run")
+    return f"[Antfarm] Retries exhausted for {label}; escalated to {target} ({target_run})."
+
+
 def bootstrap_state(state: Dict[str, Any], rows: List[sqlite3.Row]) -> None:
     now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     for row in rows:
@@ -292,6 +327,13 @@ def prune_state(state: Dict[str, Any], rows: List[sqlite3.Row]) -> None:
         run_id = key.split(":", 1)[0]
         if run_id not in active_ids:
             state["terminal_sent"].pop(key, None)
+    for key in list(state["smoke_retry_sent"].keys()):
+        run_id = key.split(":", 1)[0]
+        if run_id not in active_ids:
+            state["smoke_retry_sent"].pop(key, None)
+    for key in list(state["escalation_sent"].keys()):
+        if key not in active_ids:
+            state["escalation_sent"].pop(key, None)
 
 
 def main() -> int:
@@ -312,7 +354,7 @@ def main() -> int:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             """
-            SELECT id, workflow_id, task, status, run_number, created_at, updated_at
+            SELECT id, workflow_id, task, status, run_number, created_at, updated_at, context
             FROM runs
             ORDER BY created_at ASC
             LIMIT 1000
@@ -337,15 +379,29 @@ def main() -> int:
     started_sent = 0
     terminal_sent = 0
     stalled_sent = 0
+    smoke_retry_sent = 0
+    escalation_sent = 0
 
     for row in rows:
         run_id = str(row["id"])
         status = str(row["status"]).lower()
+        ctx = parse_context(row["context"])
 
         if status == "running" and run_id not in state["started_sent"]:
             if send_whatsapp(target, started_message(row), args.dry_run):
                 state["started_sent"][run_id] = now_iso
                 started_sent += 1
+
+        retry_from = ctx.get("retry_from_step", "")
+        retry_count_raw = ctx.get("retry_count", "0")
+        retry_count = int(retry_count_raw) if retry_count_raw.isdigit() else 0
+        if status == "running" and retry_from == "live-smoke" and retry_count > 0:
+            retry_key = f"{run_id}:{retry_count}"
+            if retry_key not in state["smoke_retry_sent"]:
+                detail = " " + " ".join((ctx.get("retry_feedback", "") or "").split())[:120]
+                if send_whatsapp(target, smoke_retry_message(row, retry_count, detail.strip()), args.dry_run):
+                    state["smoke_retry_sent"][retry_key] = now_iso
+                    smoke_retry_sent += 1
 
         if status in TERMINAL:
             key = f"{run_id}:{status}"
@@ -354,6 +410,11 @@ def main() -> int:
                     state["terminal_sent"][key] = now_iso
                     state["stalled_sent"].pop(run_id, None)
                     terminal_sent += 1
+
+            if status == "failed" and ctx.get("escalation_run_id") and run_id not in state["escalation_sent"]:
+                if send_whatsapp(target, escalation_message(row, ctx), args.dry_run):
+                    state["escalation_sent"][run_id] = now_iso
+                    escalation_sent += 1
             continue
 
         if status != "running":
@@ -377,7 +438,7 @@ def main() -> int:
 
     save_state(state_path, state)
     print(
-        f"[antfarm-notify] target={target} started={started_sent} terminal={terminal_sent} stalled={stalled_sent}"
+        f"[antfarm-notify] target={target} started={started_sent} terminal={terminal_sent} stalled={stalled_sent} smoke_retry={smoke_retry_sent} escalated={escalation_sent}"
         + (" dry_run=true" if args.dry_run else "")
     )
     return 0

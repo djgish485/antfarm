@@ -2,7 +2,7 @@
 # session with clean context. Memory persists via git history and progress files.
 id: feature-dev
 name: Feature Development Workflow
-version: 5
+version: 6
 description: |
   Story-based execution pipeline. Planner decomposes tasks into user stories.
   Setup prepares the environment and establishes baseline.
@@ -372,6 +372,40 @@ steps:
     on_fail:
       escalate_to: human
 
+  - id: stabilize
+    agent: developer
+    input: |
+      Apply a focused stabilization patch when post-merge smoke reports a regression.
+
+      TASK:
+      {{task}}
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      SMOKE_ERROR_JSON: {{smoke_error_json}}
+      RETRY_FEEDBACK: {{retry_feedback}}
+
+      Instructions:
+      1. Normalize execution target:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO.
+         - If BRANCH is missing or equals main for /opt/the-algo work, use BRANCH=RUN_BRANCH.
+      2. If SMOKE_ERROR_JSON is missing/empty, do not change code; reply STATUS: done with CHANGES=no stabilization needed.
+      3. If SMOKE_ERROR_JSON is present, implement the smallest fix that directly addresses the smoke failure.
+      4. Run TEST_CMD and BUILD_CMD after the fix.
+      5. Commit the stabilization patch.
+
+      Reply with:
+      STATUS: done
+      CHANGES: what was stabilized (or "no stabilization needed")
+      TESTS: what was run and result
+      COMMIT: <full sha after stabilization>
+    expects: "STATUS: done"
+    on_fail:
+      escalate_to: human
 
   - id: merge-main
     agent: developer
@@ -422,3 +456,43 @@ steps:
     expects: "STATUS: done"
     on_fail:
       escalate_to: human
+
+  - id: live-smoke
+    agent: verifier
+    input: |
+      Run live smoke validation for the merged deployment.
+
+      TASK:
+      {{task}}
+
+      MAIN_COMMIT: {{main_commit}}
+      MERGED_BRANCH: {{merged_branch}}
+
+      Instructions:
+      1. Run:
+         python3 /root/.openclaw/workspace/antfarm/scripts/live-smoke.py \
+           --public-url https://algo2.dangish.net \
+           --origin-url http://127.0.0.1:3000 \
+           --json-out /tmp/antfarm-live-smoke-{{run_id}}.json
+      2. If the script exits 0, return STATUS: done and include SMOKE_RESULT_JSON.
+      3. If the script exits non-zero, return STATUS: retry and include:
+         - SMOKE_FAILURE_SIGNATURE: value from failure.failure_signature
+         - SMOKE_ERROR_JSON: full JSON content
+         - ISSUES: one-line summary
+      4. Do not skip this check.
+
+      Reply with (success):
+      STATUS: done
+      SMOKE_RESULT_JSON: <json>
+
+      Or on failure:
+      STATUS: retry
+      SMOKE_FAILURE_SIGNATURE: <signature>
+      SMOKE_ERROR_JSON: <json>
+      ISSUES: <short summary>
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: stabilize
+      max_retries: 2
+      on_exhausted:
+        escalate_to: bug-fix-fast

@@ -10,6 +10,7 @@ import { emitEvent } from "./events.js";
 import { logger } from "../lib/logger.js";
 import { getMaxRoleTimeoutSeconds } from "./install.js";
 import { isFrontendChange } from "../lib/frontend-detect.js";
+import { resolveAntfarmCli } from "./paths.js";
 
 /**
  * Parse KEY: value lines from step output with support for multi-line values.
@@ -71,6 +72,222 @@ function getWorkflowId(runId: string): string | undefined {
     const row = db.prepare("SELECT workflow_id FROM runs WHERE id = ?").get(runId) as { workflow_id: string } | undefined;
     return row?.workflow_id;
   } catch { return undefined; }
+}
+
+function oneLine(text: string, max = 240): string {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length <= max ? compact : `${compact.slice(0, max - 3)}...`;
+}
+
+function buildFailureSignature(context: Record<string, string>, output: string): string {
+  return [
+    context["smoke_failure_signature"],
+    context["smoke_error_json"],
+    context["issues"],
+    context["merge_result"],
+    output,
+  ].filter(Boolean).join("\n");
+}
+
+function collectEscalationLogs(): string {
+  const blocks: string[] = [];
+  const commands: Array<{ label: string; cmd: string }> = [
+    { label: "the-algo", cmd: "journalctl -u the-algo -n 80 --no-pager 2>/dev/null || true" },
+    { label: "cloudflared", cmd: "journalctl -u cloudflared -n 60 --no-pager 2>/dev/null || true" },
+  ];
+
+  for (const { label, cmd } of commands) {
+    try {
+      const out = execSync(cmd, { encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+      if (out.trim()) {
+        blocks.push(`[${label}]\n${out.trim()}`);
+      }
+    } catch {
+      // best-effort
+    }
+  }
+
+  return blocks.join("\n\n");
+}
+
+function maybeEscalateOnExhausted(
+  step: {
+    id: string;
+    run_id: string;
+    step_id: string;
+    on_exhausted_workflow: string | null;
+  },
+  context: Record<string, string>,
+  output: string
+): string | null {
+  const targetWorkflow = step.on_exhausted_workflow;
+  if (!targetWorkflow) return null;
+
+  const db = getDb();
+  const failureSignature = buildFailureSignature(context, output);
+  const repo = context["repo"] || "unknown-repo";
+  const branch = context["branch"] || "unknown-branch";
+  const signatureHash = crypto.createHash("sha256").update(failureSignature).digest("hex").slice(0, 20);
+  const dedupeKey = `${targetWorkflow}|${repo}|${branch}|${signatureHash}`;
+
+  const existing = db.prepare(
+    "SELECT target_run_id FROM run_escalations WHERE dedupe_key = ? LIMIT 1"
+  ).get(dedupeKey) as { target_run_id: string | null } | undefined;
+  if (existing) return existing.target_run_id;
+
+  const now = new Date().toISOString();
+  const escalationId = crypto.randomUUID();
+  const logs = collectEscalationLogs();
+  const workflowId = getWorkflowId(step.run_id) ?? "unknown-workflow";
+  const runRow = db.prepare("SELECT run_number, task FROM runs WHERE id = ?").get(step.run_id) as { run_number: number | null; task: string } | undefined;
+  const runLabel = runRow?.run_number != null ? `#${runRow.run_number}` : step.run_id.slice(0, 8);
+
+  const task = [
+    `Auto-escalation from ${workflowId} ${runLabel} after retries exhausted.`,
+    `Source run: ${step.run_id}`,
+    `Source step: ${step.step_id}`,
+    `Repo: ${repo}`,
+    `Branch: ${branch}`,
+    context["main_commit"] ? `Main commit: ${context["main_commit"]}` : "",
+    `Failure signature hash: ${signatureHash}`,
+    "",
+    "Smoke failure details:",
+    context["smoke_error_json"] || oneLine(failureSignature, 2000),
+    "",
+    "Recent service logs:",
+    logs || "(no logs captured)",
+    "",
+    "Reproduction:",
+    "1. Check deployed URL https://algo2.dangish.net",
+    "2. Verify app shell, feed endpoint, and post detail route.",
+    "3. Apply minimal fix on target repo and validate end-to-end.",
+    "",
+    `Original task: ${runRow?.task ?? context["task"] ?? "(missing task)"}`,
+  ].filter(Boolean).join("\n");
+
+  db.prepare(
+    "INSERT INTO run_escalations (id, source_run_id, source_step_id, target_workflow_id, dedupe_key, status, detail, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'creating', ?, ?, ?)"
+  ).run(escalationId, step.run_id, step.step_id, targetWorkflow, dedupeKey, oneLine(failureSignature, 1000), now, now);
+
+  try {
+    const cli = resolveAntfarmCli();
+    const outputText = execFileSync("node", [cli, "workflow", "run", targetWorkflow, task], {
+      encoding: "utf8",
+      timeout: 120000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const match = outputText.match(/\(([0-9a-fA-F-]{36})\)/);
+    const targetRunId = match?.[1] ?? null;
+
+    db.prepare(
+      "UPDATE run_escalations SET status = 'started', target_run_id = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(targetRunId, escalationId);
+
+    if (targetRunId) {
+      context["escalation_workflow"] = targetWorkflow;
+      context["escalation_run_id"] = targetRunId;
+      db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), step.run_id);
+    }
+
+    return targetRunId;
+  } catch (err) {
+    const message = oneLine(err instanceof Error ? err.message : String(err), 800);
+    db.prepare(
+      "UPDATE run_escalations SET status = 'failed', detail = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(message, escalationId);
+    return null;
+  }
+}
+
+function handleSingleStepRetry(
+  step: {
+    id: string;
+    run_id: string;
+    step_id: string;
+    step_index: number;
+    retry_count: number;
+    max_retries: number;
+    retry_step_id: string | null;
+    on_exhausted_workflow: string | null;
+  },
+  output: string,
+  context: Record<string, string>
+): { advanced: boolean; runCompleted: boolean } {
+  const db = getDb();
+  const retryTargetStepId = step.retry_step_id || step.step_id;
+  const retryTarget = db.prepare(
+    "SELECT id, step_id, step_index, type FROM steps WHERE run_id = ? AND step_id = ? LIMIT 1"
+  ).get(step.run_id, retryTargetStepId) as { id: string; step_id: string; step_index: number; type: string } | undefined;
+
+  const target = retryTarget ?? { id: step.id, step_id: step.step_id, step_index: step.step_index, type: "single" };
+  const retryDetail = context["issues"] || context["merge_result"] || context["smoke_error_json"] || output;
+  const newRetryCount = step.retry_count + 1;
+
+  context["retry_feedback"] = retryDetail;
+  context["retry_count"] = String(newRetryCount);
+  context["retry_from_step"] = step.step_id;
+  context["retry_target_step"] = target.step_id;
+  db.prepare("UPDATE runs SET context = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(context), step.run_id);
+
+  if (newRetryCount > step.max_retries) {
+    db.prepare(
+      "UPDATE steps SET status = 'failed', output = ?, retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(output, newRetryCount, step.id);
+    db.prepare(
+      "UPDATE runs SET status = 'failed', updated_at = datetime('now') WHERE id = ?"
+    ).run(step.run_id);
+
+    const wfId = getWorkflowId(step.run_id);
+    const escalatedRunId = maybeEscalateOnExhausted(step, context, output);
+    const failDetail = escalatedRunId
+      ? `Step retries exhausted. Escalated to ${step.on_exhausted_workflow} (${escalatedRunId}).`
+      : "Step retries exhausted.";
+
+    emitEvent({ ts: new Date().toISOString(), event: "step.failed", runId: step.run_id, workflowId: wfId, stepId: step.step_id, detail: failDetail });
+    emitEvent({ ts: new Date().toISOString(), event: "run.failed", runId: step.run_id, workflowId: wfId, detail: failDetail });
+    scheduleRunCronTeardown(step.run_id);
+    return { advanced: false, runCompleted: false };
+  }
+
+  const fromIndex = Math.min(target.step_index, step.step_index);
+  const toIndex = Math.max(target.step_index, step.step_index);
+  const affectedSteps = db.prepare(
+    "SELECT id, step_id, step_index, type FROM steps WHERE run_id = ? AND step_index >= ? AND step_index <= ? ORDER BY step_index ASC"
+  ).all(step.run_id, fromIndex, toIndex) as Array<{ id: string; step_id: string; step_index: number; type: string }>;
+
+  for (const row of affectedSteps) {
+    const nextStatus = row.step_index === target.step_index ? "pending" : "waiting";
+    if (row.type === "loop") {
+      db.prepare(
+        "UPDATE steps SET status = ?, current_story_id = NULL, output = NULL, updated_at = datetime('now') WHERE id = ?"
+      ).run(nextStatus, row.id);
+    } else {
+      db.prepare(
+        "UPDATE steps SET status = ?, output = NULL, updated_at = datetime('now') WHERE id = ?"
+      ).run(nextStatus, row.id);
+    }
+  }
+
+  db.prepare(
+    "UPDATE steps SET retry_count = ?, updated_at = datetime('now') WHERE id = ?"
+  ).run(newRetryCount, step.id);
+
+  const wfId = getWorkflowId(step.run_id);
+  emitEvent({
+    ts: new Date().toISOString(),
+    event: "step.retry",
+    runId: step.run_id,
+    workflowId: wfId,
+    stepId: step.step_id,
+    detail: `Retry ${newRetryCount}/${step.max_retries} -> ${target.step_id}. ${oneLine(retryDetail, 160)}`
+  });
+  emitEvent({ ts: new Date().toISOString(), event: "step.pending", runId: step.run_id, workflowId: wfId, stepId: target.step_id });
+
+  logger.info(`Step retry requested: ${step.step_id} -> ${target.step_id}`, {
+    runId: step.run_id,
+    stepId: step.id,
+  });
+  return { advanced: false, runCompleted: false };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -586,8 +803,21 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
   const db = getDb();
 
   const step = db.prepare(
-    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, status FROM steps WHERE id = ?"
-  ).get(stepId) as { id: string; run_id: string; step_id: string; step_index: number; type: string; loop_config: string | null; current_story_id: string | null; status: string } | undefined;
+    "SELECT id, run_id, step_id, step_index, type, loop_config, current_story_id, status, retry_count, max_retries, retry_step_id, on_exhausted_workflow FROM steps WHERE id = ?"
+  ).get(stepId) as {
+    id: string;
+    run_id: string;
+    step_id: string;
+    step_index: number;
+    type: string;
+    loop_config: string | null;
+    current_story_id: string | null;
+    status: string;
+    retry_count: number;
+    max_retries: number;
+    retry_step_id: string | null;
+    on_exhausted_workflow: string | null;
+  } | undefined;
 
   if (!step) throw new Error(`Step not found: ${stepId}`);
 
@@ -688,6 +918,10 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
     if (lc.verifyEach && lc.verifyStep === step.step_id) {
       return handleVerifyEachCompletion(step, loopStepRow.id, output, context);
     }
+  }
+
+  if ((context["status"] ?? "").toLowerCase() === "retry") {
+    return handleSingleStepRetry(step, output, context);
   }
 
   // Single step: mark done and advance

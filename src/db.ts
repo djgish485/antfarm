@@ -48,6 +48,8 @@ function migrate(db: DatabaseSync): void {
       output TEXT,
       retry_count INTEGER DEFAULT 0,
       max_retries INTEGER DEFAULT 2,
+      retry_step_id TEXT,
+      on_exhausted_workflow TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -85,6 +87,12 @@ function migrate(db: DatabaseSync): void {
   if (!colNames.has("abandoned_count")) {
     db.exec("ALTER TABLE steps ADD COLUMN abandoned_count INTEGER DEFAULT 0");
   }
+  if (!colNames.has("retry_step_id")) {
+    db.exec("ALTER TABLE steps ADD COLUMN retry_step_id TEXT");
+  }
+  if (!colNames.has("on_exhausted_workflow")) {
+    db.exec("ALTER TABLE steps ADD COLUMN on_exhausted_workflow TEXT");
+  }
 
   // Add columns to runs table for backwards compat
   const runCols = db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>;
@@ -101,6 +109,22 @@ function migrate(db: DatabaseSync): void {
       ) WHERE run_number IS NULL
     `);
   }
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS run_escalations (
+      id TEXT PRIMARY KEY,
+      source_run_id TEXT NOT NULL,
+      source_step_id TEXT NOT NULL,
+      target_workflow_id TEXT NOT NULL,
+      target_run_id TEXT,
+      dedupe_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'created',
+      detail TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_run_escalations_dedupe ON run_escalations(dedupe_key);
+  `);
 }
 
 export function nextRunNumber(): number {

@@ -1,6 +1,6 @@
 id: bug-fix-fast
 name: Fast Build/Test Fix
-version: 3
+version: 4
 description: |
   Fast path for straightforward build/test/lint/typecheck breakages.
   Skips triage and investigation to reduce latency. Setup reproduces the failure,
@@ -254,3 +254,39 @@ steps:
     expects: "STATUS: done"
     on_fail:
       escalate_to: human
+
+  - id: live-smoke
+    agent: verifier
+    input: |
+      Run live smoke validation after merge-main for this bugfix run.
+
+      TASK:
+      {{task}}
+
+      MAIN_COMMIT: {{main_commit}}
+      MERGED_BRANCH: {{merged_branch}}
+
+      Instructions:
+      1. Run:
+         python3 /root/.openclaw/workspace/antfarm/scripts/live-smoke.py \
+           --public-url https://algo2.dangish.net \
+           --origin-url http://127.0.0.1:3000 \
+           --json-out /tmp/antfarm-live-smoke-{{run_id}}.json
+      2. If script exits 0: return STATUS: done and include SMOKE_RESULT_JSON.
+      3. If script exits non-zero: return STATUS: retry and include SMOKE_FAILURE_SIGNATURE, SMOKE_ERROR_JSON, and ISSUES.
+
+      Reply with (success):
+      STATUS: done
+      SMOKE_RESULT_JSON: <json>
+
+      Or on failure:
+      STATUS: retry
+      SMOKE_FAILURE_SIGNATURE: <signature>
+      SMOKE_ERROR_JSON: <json>
+      ISSUES: <short summary>
+    expects: "STATUS: done"
+    on_fail:
+      retry_step: fix
+      max_retries: 2
+      on_exhausted:
+        escalate_to: human
