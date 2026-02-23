@@ -279,6 +279,61 @@ def main() -> int:
         )
         return finish(report, args.json_out, code)
 
+    # Rebuild if the .next build is stale (BUILD_ID timestamp < latest commit)
+    import os
+    import pathlib
+
+    next_dir = pathlib.Path(args.repo) / ".next"
+    build_id_path = next_dir / "BUILD_ID"
+    needs_build = True
+
+    if build_id_path.exists():
+        build_mtime = build_id_path.stat().st_mtime
+        # Get timestamp of HEAD commit
+        commit_ts_res = run_cmd(
+            ["git", "-C", args.repo, "log", "-1", "--format=%ct", "HEAD"],
+            args.command_timeout,
+        )
+        if commit_ts_res.get("ok") and commit_ts_res.get("stdout", "").strip():
+            commit_ts = float(commit_ts_res["stdout"].strip())
+            if build_mtime >= commit_ts:
+                needs_build = False
+
+    if needs_build:
+        build_res = run_cmd(
+            ["bash", "-c", f"cd {args.repo} && npm run build"],
+            600,  # 10 min timeout for builds
+        )
+        append_check(
+            report,
+            {
+                "name": "npm_build",
+                "ok": build_res.get("ok", False),
+                "rc": build_res.get("rc", 1),
+                "elapsed_ms": build_res.get("elapsed_ms", 0),
+                "stderr": one_line(str(build_res.get("stderr", "")), 220),
+            },
+        )
+        if not build_res.get("ok", False):
+            code = fail(
+                report,
+                "build_failed",
+                f"npm run build rc={build_res.get('rc')} err={build_res.get('stderr', '')}",
+                "npm_build",
+                args.service,
+            )
+            return finish(report, args.json_out, code)
+    else:
+        append_check(
+            report,
+            {
+                "name": "npm_build",
+                "ok": True,
+                "skipped": True,
+                "reason": "build is newer than HEAD commit",
+            },
+        )
+
     restart = run_cmd(["systemctl", "restart", args.service], args.command_timeout)
     append_check(
         report,
