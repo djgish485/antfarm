@@ -1,10 +1,11 @@
 id: bug-fix-fast
 name: Fast Build/Test Fix
-version: 2
+version: 3
 description: |
   Fast path for straightforward build/test/lint/typecheck breakages.
   Skips triage and investigation to reduce latency. Setup reproduces the failure,
   fixer implements a minimal patch, verifier independently confirms the fix.
+  Uses isolated run worktrees for /opt/the-algo and a serialized merge queue to main.
 
 polling:
   model: codex
@@ -58,21 +59,29 @@ steps:
 
       Instructions:
       1. Determine the target repo path from the task. If not explicit, use /opt/the-algo.
-      2. cd into the repo and detect the current branch with `git branch --show-current`.
-      3. For `/opt/the-algo`, read target branch from `/opt/the-algo/.antfarm-target-branch` (fallback: current branch). The active branch MUST equal that target. Do NOT checkout/switch branches.
-      4. For non-production repos, do NOT switch branches unless the task explicitly requests it.
+      2. Resolve an isolated run workspace to avoid cross-run collisions:
+         - If REPO is /opt/the-algo, set RUN_REPO=/root/.openclaw/workspaces/workflows/bug-fix-fast/runs/{{run_id}}/the-algo
+         - Set RUN_BRANCH=bug-fix-fast-{{run_id}}
+         - Ensure /opt/the-algo is fetched (`git -C /opt/the-algo fetch origin --prune`)
+         - Create or reuse isolated worktree at RUN_REPO and branch RUN_BRANCH from origin/main
+         - Use RUN_REPO as REPO and RUN_BRANCH as BRANCH for the rest of the run
+      3. For non-/opt/the-algo repos, use the repo and current branch unless task explicitly requests otherwise.
+      4. cd into the resolved REPO and ensure active branch is resolved BRANCH.
       5. Detect and record build/test commands from package scripts or project tooling.
       6. Reproduce the failure by running build/test/lint/typecheck commands relevant to the report.
-      7. Keep output concise and factual.
+      7. If a pre-existing/unrelated baseline problem blocks full reproduction, do NOT fail setup.
+         Record it in BLOCKERS and FAILURE_SUMMARY, then continue so the fix step can proceed.
+      8. Keep output concise and factual.
 
       Output contract (machine-parsed, mandatory):
       - ALWAYS include these exact keys, even when inferred via defaults.
       - If unknown, use deterministic fallbacks:
         REPO=/opt/the-algo
-        BRANCH=current branch (or .antfarm-target-branch if present)
+        BRANCH=current branch
         BUILD_CMD=npm run build
         TEST_CMD=npm test
         FAILURE_SUMMARY=one-line summary from observed failure or task text
+        BLOCKERS=none or short blocker summary
 
       Reply with:
       STATUS: done
@@ -81,6 +90,7 @@ steps:
       BUILD_CMD: build command
       TEST_CMD: test command
       FAILURE_SUMMARY: short summary of reproduced failure
+      BLOCKERS: none or short blocker summary
       CHANGES: concise summary of setup findings/actions
       TESTS: what was run and result
     expects: "STATUS: done"
@@ -101,22 +111,24 @@ steps:
       BUILD_CMD: {{build_cmd}}
       TEST_CMD: {{test_cmd}}
       FAILURE_SUMMARY: {{failure_summary}}
+      SETUP_BLOCKERS: {{blockers}}
 
       VERIFY FEEDBACK (if retrying):
       {{verify_feedback}}
 
       Instructions:
-      1. If any resolved field contains a token like `[missing: ...]`, self-heal before coding:
+      1. If any resolved field contains a token like [missing: ...], self-heal before coding:
          - REPO: extract from task text; fallback /opt/the-algo.
-         - BRANCH: use `cat <repo>/.antfarm-target-branch` when present, else `git -C <repo> branch --show-current`.
-         - BUILD_CMD: prefer package.json build script; fallback `npm run build`.
-         - TEST_CMD: prefer package.json test script; fallback `npm test`.
+         - BRANCH: if REPO is /opt/the-algo, use main; otherwise use git -C <repo> branch --show-current.
+         - BUILD_CMD: prefer package.json build script; fallback npm run build.
+         - TEST_CMD: prefer package.json test script; fallback npm test.
          - FAILURE_SUMMARY: derive a one-line summary from task text and observed behavior.
       2. cd into the repo and checkout the resolved branch.
       3. Implement the smallest fix that resolves the reported failure.
       4. Add or update a focused regression test where applicable.
       5. Run the resolved build/test commands.
-      6. Commit with: fix: resolve <short failure summary>
+      6. If unrelated blocker(s) persist, report them in TESTS but still complete the coding fix.
+      7. Commit with: fix: resolve <short failure summary>
 
       Reply with:
       STATUS: done
@@ -149,8 +161,8 @@ steps:
       COMMIT_SHA: {{commit_sha}}
 
       Instructions:
-      1. If any field includes `[missing: ...]`, resolve it using the same fallback rules as the fixer before verification.
-      2. Run: `git show --stat {{commit_sha}}` and `git show {{commit_sha}}`.
+      1. If any field includes [missing: ...], resolve it using the same fallback rules as the fixer before verification.
+      2. Run: git show --stat {{commit_sha}} and git show {{commit_sha}}.
       3. Reject if commit is empty or unrelated to the reported failure.
       4. Run the resolved build/test commands to confirm passing state.
       5. Confirm the failure reported in FAILURE_SUMMARY is addressed.
@@ -170,3 +182,75 @@ steps:
       max_retries: 2
       on_exhausted:
         escalate_to: human
+
+  - id: ship
+    agent: fixer
+    input: |
+      Push this completed bugfix branch.
+
+      TASK:
+      {{task}}
+
+      REPO: {{repo}}
+      BRANCH: {{branch}}
+      COMMIT_SHA: {{commit_sha}}
+
+      Instructions:
+      1. cd into {{repo}} and checkout {{branch}}.
+      2. Ensure HEAD matches {{commit_sha}}.
+      3. Push the branch to origin.
+      4. Capture the pushed commit SHA (git rev-parse HEAD).
+
+      Reply with:
+      STATUS: done
+      BRANCH: {{branch}}
+      COMMIT: <full sha>
+      PUSH: <success/failure with short detail>
+    expects: "STATUS: done"
+    on_fail:
+      escalate_to: human
+
+  - id: merge-main
+    agent: fixer
+    input: |
+      Promote this completed bugfix run to main through the serialized merge queue.
+
+      TASK:
+      {{task}}
+
+      RUN_REPO: {{repo}}
+      RUN_BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      COMMIT: {{commit}}
+
+      Instructions:
+      1. This step MUST serialize merges to main across concurrent runs.
+      2. Use a file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 minutes).
+      3. Inside the lock, run merge operations in a dedicated queue repo:
+         - QUEUE_REPO=/root/.openclaw/workspaces/workflows/feature-dev/merge-queue/the-algo
+         - If QUEUE_REPO does not exist, clone /opt/the-algo into QUEUE_REPO
+         - git -C QUEUE_REPO fetch origin --prune
+         - git -C QUEUE_REPO checkout main
+         - git -C QUEUE_REPO reset --hard origin/main
+         - Verify origin/{{branch}} exists; fail clearly if missing
+         - git -C QUEUE_REPO merge --no-ff --no-edit origin/{{branch}}
+         - Run TEST_CMD in QUEUE_REPO
+         - Run BUILD_CMD in QUEUE_REPO
+         - git -C QUEUE_REPO push origin main
+         - Capture resulting main SHA via git -C QUEUE_REPO rev-parse HEAD
+      4. If merge conflicts happen, abort merge and return STATUS: retry with clear details.
+      5. If tests/build fail after merge, reset QUEUE_REPO back to origin/main and return STATUS: retry.
+
+      Reply with:
+      STATUS: done
+      MAIN_COMMIT: <full sha now on origin/main>
+      MERGED_BRANCH: {{branch}}
+      MERGE_RESULT: queued merge succeeded
+
+      Or if blocked:
+      STATUS: retry
+      MERGE_RESULT: <why merge failed>
+    expects: "STATUS: done"
+    on_fail:
+      escalate_to: human

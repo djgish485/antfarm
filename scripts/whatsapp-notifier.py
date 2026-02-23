@@ -234,15 +234,13 @@ def send_whatsapp(target: str, message: str, dry_run: bool) -> bool:
     return False
 
 
-def compact_task(text: object, limit: int = 96) -> str:
+def compact_task(text: object) -> str:
     if not isinstance(text, str):
         return "(task unavailable)"
     flat = " ".join(text.split())
     if not flat:
         return "(task unavailable)"
-    if len(flat) <= limit:
-        return flat
-    return flat[: limit - 3] + "..."
+    return flat
 
 
 def run_label(run_number: object, workflow_id: object, run_id: str) -> str:

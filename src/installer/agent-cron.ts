@@ -46,6 +46,8 @@ RULES:
 1. NEVER end your session without calling step complete or step fail
 2. Write output to a file first, then pipe via stdin (shell escaping breaks direct args)
 3. If you're unsure whether to complete or fail, call step fail with an explanation
+4. NEVER call step complete with empty output
+5. Output MUST include at least a STATUS: line
 
 The workflow cannot advance until you report. Your session ending without reporting = broken pipeline.`;
 }
@@ -83,6 +85,8 @@ RULES:
 1. NEVER end your session without calling step complete or step fail
 2. Write output to a file first, then pipe via stdin (shell escaping breaks direct args)
 3. If you're unsure whether to complete or fail, call step fail with an explanation
+4. NEVER call step complete with empty output
+5. Output MUST include at least a STATUS: line
 
 The workflow cannot advance until you report. Your session ending without reporting = broken pipeline.`;
 }

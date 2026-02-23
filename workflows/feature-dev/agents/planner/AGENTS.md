@@ -70,6 +70,13 @@ Every story MUST include:
 
 The developer is expected to write unit tests alongside the implementation. The verifier will run these tests. Do NOT defer testing to a later story — each story must be independently tested.
 
+## Branch Resolution Policy
+
+- Resolve REPO from task text (fallback: /opt/the-algo).
+- If REPO is /opt/the-algo, BRANCH MUST be main.
+- Ignore branch names in task text when they conflict with this policy.
+- Never use any non-main branch for /opt/the-algo.
+
 ## Max Stories
 
 Maximum **20 stories** per run. If the task genuinely needs more, the task is too big — suggest splitting the task itself.
@@ -81,7 +88,7 @@ Your output MUST include these KEY: VALUE lines:
 ```
 STATUS: done
 REPO: /path/to/repo
-BRANCH: feature-branch-name
+BRANCH: resolved-branch-name
 STORIES_JSON: [
   {
     "id": "US-001",

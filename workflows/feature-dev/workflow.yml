@@ -13,6 +13,9 @@ polling:
   model: codex
   timeoutSeconds: 120
 
+cron:
+  interval_ms: 60000
+
 agents:
   - id: planner
     name: Planner
@@ -102,11 +105,17 @@ steps:
       6. Always include "Typecheck passes" as the last criterion in every story
       7. Every story MUST include test criteria — "Tests for [feature] pass"
       8. The developer is expected to write tests as part of each story
+      9. Determine REPO path from task text (fallback: /opt/the-algo).
+      10. Resolve BRANCH deterministically:
+         - If REPO is /opt/the-algo, BRANCH MUST be main.
+         - For other repos, use the repo current branch unless task explicitly requires another.
+      11. Ignore branch names in task text when they conflict with this policy.
+      12. For /opt/the-algo, never use any branch except main.
 
       Reply with:
       STATUS: done
       REPO: /path/to/repo
-      BRANCH: feature-branch-name
+      BRANCH: resolved branch name
       STORIES_JSON: [ ... array of story objects ... ]
     expects: "STATUS: done"
     max_retries: 2
@@ -125,16 +134,33 @@ steps:
       BRANCH: {{branch}}
 
       Instructions:
-      1. cd into the repo
-      2. Create the feature branch (git checkout -b {{branch}})
-      3. Read package.json, CI config, test config to understand the build/test setup
-      4. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
-      5. Run the build to establish a baseline
-      6. Run the tests to establish a baseline
-      7. Report what you found
+      1. For /opt/the-algo, force BRANCH=main and treat main as the BASE branch.
+      2. Resolve an isolated run workspace to avoid cross-run collisions:
+         - If REPO is /opt/the-algo, set RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - Set RUN_BRANCH=feature-dev-{{run_id}}
+         - Ensure /opt/the-algo is fetched (`git -C /opt/the-algo fetch origin`)
+         - Create or reuse isolated worktree at RUN_REPO and branch RUN_BRANCH from origin/main
+         - Use RUN_REPO as REPO and RUN_BRANCH as BRANCH for the rest of the run
+      3. For non-/opt/the-algo repos, keep REPO={{repo}} and BRANCH={{branch}} unless task says otherwise.
+         For /opt/the-algo, use RUN_REPO and RUN_BRANCH for the rest of the run and never write code in /opt/the-algo.
+      4. cd into resolved REPO and ensure active branch is resolved BRANCH.
+      5. Read package.json, CI config, test config to understand the build/test setup
+      6. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
+      7. Run the build to establish a baseline
+      8. Run the tests to establish a baseline
+      9. Report what you found.
+      10. Output contract is mandatory: ALWAYS include REPO, BRANCH, BUILD_CMD, TEST_CMD, CI_NOTES, BASELINE.
+      11. Deterministic fallbacks when unknown:
+         - For /opt/the-algo tasks: REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo and BRANCH=feature-dev-{{run_id}}
+         - BUILD_CMD=npm run build
+         - TEST_CMD=npm test
+         - CI_NOTES=none found
+         - BASELINE=one-line pass/fail summary
 
       Reply with:
       STATUS: done
+      REPO: <resolved repo path>
+      BRANCH: <resolved branch name>
       BUILD_CMD: <build command>
       TEST_CMD: <test command>
       CI_NOTES: <brief CI notes>
@@ -179,15 +205,21 @@ steps:
       {{progress}}
 
       Instructions:
-      1. Read progress-{{run_id}}.txt — especially the Codebase Patterns section
-      2. Pull latest on the branch
-      3. Implement this story only
-      4. Write tests for this story's functionality
-      5. Run typecheck / build
-      6. Run tests to confirm they pass
-      7. Commit: feat: {{current_story_id}} - {{current_story_title}}
-      8. Append to progress-{{run_id}}.txt
-      9. Update Codebase Patterns if you found reusable patterns
+      1. Normalize execution target before coding:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If REPO is /opt/the-algo, missing, or not RUN_REPO, set REPO=RUN_REPO.
+         - If BRANCH is missing or equals main for /opt/the-algo work, set BRANCH=RUN_BRANCH.
+         - If BUILD_CMD/TEST_CMD are missing, use npm run build / npm test.
+      2. Read progress-{{run_id}}.txt — especially the Codebase Patterns section.
+      3. Ensure you are on the normalized BRANCH in the normalized REPO; if an upstream exists, pull --ff-only, otherwise continue.
+      4. Implement this story only.
+      5. Write tests for this story's functionality.
+      6. Run typecheck / build.
+      7. Run tests to confirm they pass.
+      8. Commit: feat: {{current_story_id}} - {{current_story_title}}.
+      9. Append to progress-{{run_id}}.txt.
+      10. Update Codebase Patterns if you found reusable patterns.
 
       Reply with:
       STATUS: done
@@ -218,6 +250,11 @@ steps:
       {{progress}}
 
       Check:
+      0. Normalize execution target:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO and BRANCH=RUN_BRANCH.
+         - If TEST_CMD is missing, use npm test.
       1. Code exists (not just TODOs or placeholders)
       2. Each acceptance criterion for the story is met
       3. Tests were written for this story's functionality
@@ -228,21 +265,13 @@ steps:
       ## Visual Verification (Frontend Changes)
       Has frontend changes: {{has_frontend_changes}}
 
-      If {{has_frontend_changes}} is 'true', you MUST also perform visual verification:
-      1. Use the agent-browser skill to visually inspect the changed UI
-      2. Open the changed HTML file directly (file:// URL) or spin up a local dev server if the project requires one
-      3. Take a screenshot of the rendered page
-      4. Visually confirm:
-         - Layout renders correctly (no broken/overlapping elements)
-         - Styling is applied as expected (colors, fonts, spacing)
-         - All visible elements from the story are present and properly positioned
-         - No missing images, icons, or visual assets
-         - Text is readable and not clipped or hidden
-      5. A visual PASS means: the page renders without broken layout, missing elements, or overlapping content
-      6. A visual FAIL means: broken layout, missing/invisible elements, overlapping or misaligned content, unstyled raw HTML, or obvious rendering errors
-      7. Include your visual findings in VERIFIED output
+      If {{has_frontend_changes}} is 'true', perform lightweight visual verification only:
+      1. Prefer deterministic code+test checks first; do NOT block the step on long-lived dev servers.
+      2. If a quick render check is possible, capture one screenshot and include PASS/FAIL notes.
+      3. If runtime data/env prevents a reliable visual check, explicitly note "VISUAL_CHECK_SKIPPED: <reason>" and continue.
+      4. Never leave processes running after verification.
 
-      If {{has_frontend_changes}} is 'false', skip visual verification entirely.
+      If {{has_frontend_changes}} is 'false', skip visual verification.
 
       Reply with:
       STATUS: done
@@ -277,11 +306,16 @@ steps:
       {{progress}}
 
       Your job (integration/E2E testing — unit tests were already written per-story):
-      1. Run the full test suite ({{test_cmd}}) to confirm everything passes together
-      2. Look for integration issues between stories
-      3. If this is a UI feature, use agent-browser to test it end-to-end
-      4. Check cross-cutting concerns: error handling, edge cases across features
-      5. Verify the overall feature works as a cohesive whole
+      0. Normalize execution target:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO and BRANCH=RUN_BRANCH.
+         - If BUILD_CMD/TEST_CMD are missing, use npm run build / npm test.
+      1. Run the full test suite ({{test_cmd}}) to confirm everything passes together.
+      2. Look for integration issues between stories.
+      3. If this is a UI feature, use agent-browser for a quick end-to-end sanity check.
+      4. Check cross-cutting concerns: error handling, edge cases across features.
+      5. Verify the overall feature works as a cohesive whole.
 
       Reply with:
       STATUS: done
@@ -316,19 +350,75 @@ steps:
       {{progress}}
 
       Instructions:
-      1. cd into {{repo}} and checkout {{branch}}
-      2. Ensure all intended changes are committed
-      3. Push the branch to origin
-      4. Capture the current commit SHA (`git rev-parse HEAD`)
-      5. Do NOT open or reference pull requests
+      1. Normalize execution target:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO.
+         - If BRANCH is missing or equals main for /opt/the-algo work, use BRANCH=RUN_BRANCH.
+      2. cd into the normalized REPO and checkout the normalized BRANCH.
+      3. Ensure all intended changes are committed.
+      4. Push the branch to origin.
+      5. Capture the current commit SHA (`git rev-parse HEAD`).
+      6. Do NOT open or reference pull requests.
 
       Reply with:
       STATUS: done
       MODE: direct-branch
-      BRANCH: {{branch}}
+      BRANCH: feature-dev-{{run_id}}
       COMMIT: <full sha>
       PUSH: <success/failure with short detail>
       SUMMARY: <concise summary of what shipped>
+    expects: "STATUS: done"
+    on_fail:
+      escalate_to: human
+
+
+  - id: merge-main
+    agent: developer
+    input: |
+      Promote this completed feature run to main through the serialized merge queue.
+
+      TASK:
+      {{task}}
+
+      RUN_REPO: {{repo}}
+      RUN_BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
+      COMMIT: {{commit}}
+
+      Instructions:
+      1. Normalize run inputs:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - If provided RUN_REPO is /opt/the-algo, missing, or not RUN_REPO, use RUN_REPO from above.
+         - If provided RUN_BRANCH is missing or equals main, use RUN_BRANCH from above.
+      2. This step MUST serialize merges to main across concurrent runs.
+      3. Use a file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 minutes).
+      4. Inside the lock, run merge operations in a dedicated queue repo:
+         - QUEUE_REPO=/root/.openclaw/workspaces/workflows/feature-dev/merge-queue/the-algo
+         - If QUEUE_REPO does not exist, clone /opt/the-algo into QUEUE_REPO
+         - git -C QUEUE_REPO fetch origin --prune
+         - git -C QUEUE_REPO checkout main
+         - git -C QUEUE_REPO reset --hard origin/main
+         - Verify origin/feature-dev-{{run_id}} exists; fail clearly if missing
+         - git -C QUEUE_REPO merge --no-ff --no-edit origin/feature-dev-{{run_id}}
+         - Run TEST_CMD in QUEUE_REPO
+         - Run BUILD_CMD in QUEUE_REPO
+         - git -C QUEUE_REPO push origin main
+         - Capture resulting main SHA via git -C QUEUE_REPO rev-parse HEAD
+      5. If merge conflicts happen, abort merge and return STATUS: retry with clear details.
+      6. If tests/build fail after merge, reset QUEUE_REPO back to origin/main and return STATUS: retry.
+
+      Reply with:
+      STATUS: done
+      MAIN_COMMIT: <full sha now on origin/main>
+      MERGED_BRANCH: feature-dev-{{run_id}}
+      MERGE_RESULT: queued merge succeeded
+
+      Or if blocked:
+      STATUS: retry
+      MERGE_RESULT: <why merge failed>
     expects: "STATUS: done"
     on_fail:
       escalate_to: human

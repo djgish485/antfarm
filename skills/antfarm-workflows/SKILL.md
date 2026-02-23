@@ -1,6 +1,6 @@
 ---
 name: antfarm-workflows
-description: "Multi-agent workflow orchestration for OpenClaw. Use when user mentions antfarm, asks to run a multi-step workflow (feature dev, bug fix, security audit), or wants to install/uninstall/check status of antfarm workflows."
+description: "Multi-agent workflow orchestration for OpenClaw. Use when user asks for research/investigation/analysis that should run via sub-agents, mentions antfarm, asks to run a multi-step workflow (feature dev, bug fix, research-fast, security audit), or wants to install/uninstall/check status of antfarm workflows."
 user-invocable: false
 ---
 
@@ -30,6 +30,7 @@ Shorthand used below: `antfarm-cli` means `node ~/.openclaw/workspace/antfarm/di
 - For bug/build/test/lint/typecheck fixes, use `bug-fix-fast` by default.
 - Never start `bug-fix` unless the user explicitly requests `bug-fix` by name.
 - If the user did not explicitly ask for `bug-fix`, do not infer it; run `bug-fix-fast`.
+- For research, analysis, investigation, or "give me a report" requests, use `research-fast` by default (even when the user does not mention antfarm/workflows explicitly).
 
 ## Core Commands
 

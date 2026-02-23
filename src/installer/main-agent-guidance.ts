@@ -23,6 +23,7 @@ Workflow routing (strict):
 - \`bug-fix-fast\`: default for all bug/build/test/lint/typecheck fix requests
 - \`bug-fix\`: deep triage flow, use ONLY when the user explicitly requests \`bug-fix\` by name
 - \`feature-dev\`: features/refactors
+- \`research-fast\`: default for research/investigation/analysis/report requests, including plain-language asks that do not mention Antfarm
 - \`security-audit\`: vulnerability scans/remediation
 
 Workflows are self-advancing via per-agent cron jobs. No manual orchestration needed.
@@ -46,6 +47,7 @@ Agent cron jobs are created automatically during install.
 - For bug/build/test/lint/typecheck fixes, ALWAYS use \`bug-fix-fast\`.
 - Do NOT use \`bug-fix\` unless the user explicitly says to use \`bug-fix\`.
 - If explicit request is missing, route to \`bug-fix-fast\`.
+- For research/analyze/investigate/report requests, ALWAYS use \`research-fast\` even if the user does not explicitly mention Antfarm.
 - Use \`feature-dev\` for features/refactors and \`security-audit\` for security work.
 - Reply quickly with workflow + run ID. Do not block main chat waiting for completion.
 ${WORKFLOW_BLOCK_END}

@@ -385,11 +385,30 @@ export function computeHasFrontendChanges(repo: string, branch: string): string 
 export type PeekResult = "HAS_WORK" | "NO_WORK";
 
 /**
+ * Throttle cleanupAbandonedSteps: run at most once every 5 minutes.
+ */
+let lastCleanupTime = 0;
+const CLEANUP_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Run abandoned-step cleanup on a throttle so polling turns can recover stuck runs
+ * even when no step reaches the claim path.
+ */
+function maybeCleanupAbandonedSteps(): void {
+  const now = Date.now();
+  if (now - lastCleanupTime >= CLEANUP_THROTTLE_MS) {
+    cleanupAbandonedSteps();
+    lastCleanupTime = now;
+  }
+}
+
+/**
  * Lightweight check: does this agent have any pending/waiting steps in active runs?
- * Unlike claimStep(), this runs a single cheap COUNT query — no cleanup, no context resolution.
- * Returns "HAS_WORK" if any pending/waiting steps exist, "NO_WORK" otherwise.
+ * Also performs throttled abandoned-step cleanup so stale "running" steps can be
+ * reset to pending during normal polling.
  */
 export function peekStep(agentId: string): PeekResult {
+  maybeCleanupAbandonedSteps();
   const db = getDb();
   const row = db.prepare(
     `SELECT COUNT(*) as cnt FROM steps s
@@ -410,21 +429,10 @@ interface ClaimResult {
 }
 
 /**
- * Throttle cleanupAbandonedSteps: run at most once every 5 minutes.
- */
-let lastCleanupTime = 0;
-const CLEANUP_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
  * Find and claim a pending step for an agent, returning the resolved input.
  */
 export function claimStep(agentId: string): ClaimResult {
-  // Throttle cleanup: run at most once every 5 minutes across all agents
-  const now = Date.now();
-  if (now - lastCleanupTime >= CLEANUP_THROTTLE_MS) {
-    cleanupAbandonedSteps();
-    lastCleanupTime = now;
-  }
+  maybeCleanupAbandonedSteps();
   const db = getDb();
 
   const step = db.prepare(
@@ -596,12 +604,26 @@ export function completeStep(stepId: string, output: string): { advanced: boolea
     return { advanced: false, runCompleted: false };
   }
 
+  const trimmedOutput = output.trim();
+  if (!trimmedOutput) {
+    logger.warn(`Rejecting empty step completion for ${step.step_id}; marking as failed/retry`, { runId: step.run_id, stepId: step.id });
+    failStep(stepId, "Empty completion output: missing STATUS/CHANGES/TESTS payload");
+    return { advanced: false, runCompleted: false };
+  }
+
   // Merge KEY: value lines into run context
   const run = db.prepare("SELECT context FROM runs WHERE id = ?").get(step.run_id) as { context: string };
   const context: Record<string, string> = JSON.parse(run.context);
 
   // Parse KEY: value lines and merge into context
-  const parsed = parseOutputKeyValues(output);
+  const parsed = parseOutputKeyValues(trimmedOutput);
+  if (!parsed.status) {
+    logger.warn(`Rejecting malformed step completion for ${step.step_id}; STATUS key missing`, { runId: step.run_id, stepId: step.id });
+    failStep(stepId, "Malformed completion output: missing STATUS key");
+    return { advanced: false, runCompleted: false };
+  }
+
+  output = trimmedOutput;
   for (const [key, value] of Object.entries(parsed)) {
     context[key] = value;
   }
