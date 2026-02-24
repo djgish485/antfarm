@@ -1,10 +1,10 @@
 id: bug-fix-fast
 name: Fast Build/Test Fix
-version: 6
+version: 7
 description: |
   Fast path for straightforward build/test/lint/typecheck breakages.
-  Skips triage and investigation to reduce latency. Setup reproduces the failure,
-  fixer implements a minimal patch, verifier independently confirms the fix.
+  Three-step pipeline: Fix (setup + implement + test), Verify (independent check + browser smoke),
+  Deploy (merge to main + deploy + live smoke).
   Uses isolated run worktrees for /opt/the-algo and a serialized merge queue to main.
 
 polling:
@@ -19,21 +19,10 @@ execution:
   workerTimeoutMinutes: 30
 
 agents:
-  - id: setup
-    name: Setup
-    role: coding
-    description: Prepares branch and reproduces the failing build/test state.
-    workspace:
-      baseDir: agents/setup
-      files:
-        AGENTS.md: ../../agents/shared/setup/AGENTS.md
-        SOUL.md: ../../agents/shared/setup/SOUL.md
-        IDENTITY.md: ../../agents/shared/setup/IDENTITY.md
-
   - id: fixer
     name: Fixer
     role: coding
-    description: Implements the smallest possible fix for the reported failure.
+    description: Sets up the environment, implements the fix, builds, tests, and pushes.
     workspace:
       baseDir: agents/fixer
       files:
@@ -44,7 +33,7 @@ agents:
   - id: verifier
     name: Verifier
     role: verification
-    description: Independently confirms the fix and validates scope.
+    description: Independently confirms the fix via build, test, diff review, and browser smoke.
     workspace:
       baseDir: agents/verifier
       skills:
@@ -55,93 +44,47 @@ agents:
         IDENTITY.md: ../../agents/shared/verifier/IDENTITY.md
 
 steps:
-  - id: setup
-    agent: setup
+  - id: fix
+    agent: fixer
     input: |
-      Prepare for a fast bug fix run.
+      Implement a minimal fix for this failure. You handle everything: setup, coding, testing, commit, push.
 
       BUG / FAILURE REPORT:
       {{task}}
 
+      VERIFY FEEDBACK (if retrying after failed verification):
+      {{verify_feedback}}
+
       Instructions:
+
+      PHASE 1 — SETUP:
       1. Determine the target repo path from the task. If not explicit, use /opt/the-algo.
-      2. Resolve an isolated run workspace to avoid cross-run collisions:
+      2. Resolve an isolated run workspace:
          - If REPO is /opt/the-algo, set RUN_REPO=/root/.openclaw/workspaces/workflows/bug-fix-fast/runs/{{run_id}}/the-algo
          - Set RUN_BRANCH=bug-fix-fast-{{run_id}}
          - Ensure /opt/the-algo is fetched (`git -C /opt/the-algo fetch origin --prune`)
          - Create or reuse isolated worktree at RUN_REPO and branch RUN_BRANCH from origin/main
-         - Use RUN_REPO as REPO and RUN_BRANCH as BRANCH for the rest of the run
-      3. For non-/opt/the-algo repos, use the repo and current branch unless task explicitly requests otherwise.
-      4. cd into the resolved REPO and ensure active branch is resolved BRANCH.
-      5. Detect and record build/test commands from package scripts or project tooling.
-      6. Reproduce the failure by running build/test/lint/typecheck commands relevant to the report.
-      7. If a pre-existing/unrelated baseline problem blocks full reproduction, do NOT fail setup.
-         Record it in BLOCKERS and FAILURE_SUMMARY, then continue so the fix step can proceed.
-      8. Keep output concise and factual.
+         - Use RUN_REPO as REPO and RUN_BRANCH as BRANCH for the rest
+      3. For non-/opt/the-algo repos, use the repo and current branch unless task says otherwise.
+      4. cd into REPO, ensure correct branch.
+      5. Detect build/test commands from package scripts.
 
-      Output contract (machine-parsed, mandatory):
-      - ALWAYS include these exact keys, even when inferred via defaults.
-      - If unknown, use deterministic fallbacks:
-        REPO=/opt/the-algo
-        BRANCH=current branch
-        BUILD_CMD=npm run build
-        TEST_CMD=npm test
-        FAILURE_SUMMARY=one-line summary from observed failure or task text
-        BLOCKERS=none or short blocker summary
+      PHASE 2 — FIX:
+      6. Implement the smallest fix that resolves the reported failure.
+      7. Add or update a focused regression test where applicable.
+      8. Run build and test commands. Fix any issues your changes introduced.
+      9. If unrelated blockers exist, note them but still complete the fix.
+
+      PHASE 3 — SHIP:
+      10. Commit with: fix: resolve <short failure summary>
+      11. Push the branch to origin.
 
       Reply with:
       STATUS: done
       REPO: /path/to/repo
       BRANCH: branch-name
-      BUILD_CMD: build command
-      TEST_CMD: test command
-      FAILURE_SUMMARY: short summary of reproduced failure
-      BLOCKERS: none or short blocker summary
-      CHANGES: concise summary of setup findings/actions
-      TESTS: what was run and result
-    expects: "STATUS: done"
-    max_retries: 2
-    on_fail:
-      escalate_to: human
-
-  - id: fix
-    agent: fixer
-    input: |
-      Implement a minimal fix for this straightforward failure.
-
-      BUG / FAILURE REPORT:
-      {{task}}
-
-      REPO: {{repo}}
-      BRANCH: {{branch}}
-      BUILD_CMD: {{build_cmd}}
-      TEST_CMD: {{test_cmd}}
-      FAILURE_SUMMARY: {{failure_summary}}
-      SETUP_BLOCKERS: {{blockers}}
-
-      VERIFY FEEDBACK (if retrying):
-      {{verify_feedback}}
-
-      Instructions:
-      1. If any resolved field contains a token like [missing: ...], self-heal before coding:
-         - REPO: extract from task text; fallback /opt/the-algo.
-         - BRANCH: if REPO is /opt/the-algo, use main; otherwise use git -C <repo> branch --show-current.
-         - BUILD_CMD: prefer package.json build script; fallback npm run build.
-         - TEST_CMD: prefer package.json test script; fallback npm test.
-         - FAILURE_SUMMARY: derive a one-line summary from task text and observed behavior.
-      2. cd into the repo and checkout the resolved branch.
-      3. Implement the smallest fix that resolves the reported failure.
-      4. Add or update a focused regression test where applicable.
-      5. Run the resolved build/test commands.
-      6. If unrelated blocker(s) persist, report them in TESTS but still complete the coding fix.
-      7. Commit with: fix: resolve <short failure summary>
-
-      Reply with:
-      STATUS: done
-      REPO: resolved repo path
-      BRANCH: resolved branch name
-      BUILD_CMD: resolved build command
-      TEST_CMD: resolved test command
+      BUILD_CMD: build command used
+      TEST_CMD: test command used
       CHANGES: concise summary of code changes
       TESTS: what was run and result
       COMMIT_SHA: full commit SHA
@@ -153,7 +96,7 @@ steps:
   - id: verify
     agent: verifier
     input: |
-      Verify this fast bugfix is complete and valid.
+      Independently verify this bugfix is correct and complete. You did NOT write this code.
 
       BUG / FAILURE REPORT:
       {{task}}
@@ -162,27 +105,40 @@ steps:
       BRANCH: {{branch}}
       BUILD_CMD: {{build_cmd}}
       TEST_CMD: {{test_cmd}}
-      CHANGES: {{changes}}
-      TESTS: {{tests}}
       COMMIT_SHA: {{commit_sha}}
 
+      DO NOT read the fixer's change summary. Instead:
+
       Instructions:
-      1. If any field includes [missing: ...], resolve it using the same fallback rules as the fixer before verification.
-      2. Run: git show --stat {{commit_sha}} and git show {{commit_sha}}.
-      3. Reject if commit is empty or unrelated to the reported failure.
-      4. Run the resolved build/test commands to confirm passing state.
-      5. Confirm the failure reported in FAILURE_SUMMARY is addressed.
-      6. Ensure no PR is created in this workflow; branch commit is sufficient.
-      7. If the fix changes frontend/UI behavior, run a LOCAL browser smoke test using headless Chromium + puppeteer-core against http://127.0.0.1:3000 (NOT the public URL which requires Cloudflare auth). puppeteer-core is installed in the repo as a devDependency; chromium is at /snap/bin/chromium. Write a small node script that launches headless chromium, loads http://127.0.0.1:3000, waits for content, checks for JS errors, and if source filter buttons exist clicks them to verify filtering works. Do NOT use the agent browser tool or the public https URL. If chromium or puppeteer-core is unavailable, skip with a note (do not retry).
 
-      Reply with:
+      PHASE 1 — CODE REVIEW:
+      1. cd into {{repo}} and checkout {{branch}}.
+      2. Run: git show --stat {{commit_sha}} and git show {{commit_sha}}
+      3. Read the diff yourself. Reject if the commit is empty or unrelated to the reported failure.
+      4. Check for obvious issues: missing edge cases, broken imports, style violations.
+
+      PHASE 2 — BUILD & TEST:
+      5. Run the build command. It must pass.
+      6. Run the test command. All tests must pass.
+      7. Confirm the failure described in the bug report is actually addressed by the changes.
+
+      PHASE 3 — BROWSER SMOKE (if applicable):
+      8. If the fix changes frontend/UI behavior, run a LOCAL browser smoke test:
+         - Use puppeteer-core (devDependency in repo) + chromium at /snap/bin/chromium
+         - Test against http://127.0.0.1:3000 (NOT the public URL which requires Cloudflare auth)
+         - Write a small node script: launch headless chromium with --no-sandbox, navigate, wait for hydration
+         - Verify the specific UI behavior mentioned in the bug report works correctly
+         - Check for JS console errors
+      9. If chromium or puppeteer-core is unavailable, skip browser test with a note.
+
+      Reply with (if everything passes):
       STATUS: done
-      VERIFIED: what was verified
+      VERIFIED: what was verified (diff review, build, tests, browser smoke)
 
-      Or if incomplete:
+      Or if issues found:
       STATUS: retry
       ISSUES:
-      - what is missing or wrong
+      - what is missing or wrong (be specific so the fixer can act on it)
     expects: "STATUS: done"
     on_fail:
       retry_step: fix
@@ -190,186 +146,67 @@ steps:
       on_exhausted:
         escalate_to: human
 
-  - id: browser-smoke
-    agent: verifier
-    input: |
-      Run browser-level smoke validation after live-smoke for this bugfix run.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-
-      Instructions:
-      1. Run a LOCAL headless browser test against http://127.0.0.1:3000 using puppeteer-core (installed in repo as devDependency) and chromium at /snap/bin/chromium. Do NOT use the public https://algo2.dangish.net URL (requires Cloudflare auth). Do NOT use the agent browser tool.
-      2. Write a small node script (ESM) that: imports puppeteer from the repo's node_modules/puppeteer-core, launches chromium headless with --no-sandbox, navigates to http://127.0.0.1:3000, waits for networkidle2 + 3s for React hydration.
-      3. Confirm feed screen renders (check article count > 0).
-      4. Click one feed item and confirm post detail opens without "Application error".
-      5. If source filter buttons exist, click "Twitter" and verify items are filtered, then click "All sources" to reset.
-      6. Collect any page errors. Report results.
-      7. If chromium or puppeteer-core is unavailable, return STATUS: done with BROWSER_SMOKE: skipped (do not retry).
-
-      Reply with (success):
-      STATUS: done
-      BROWSER_SMOKE: pass
-      NOTES: <what was clicked and verified>
-
-      Or on failure:
-      STATUS: retry
-      ISSUES: <short summary>
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: fix
-      max_retries: 2
-      on_exhausted:
-        escalate_to: human
-
-  - id: ship
+  - id: deploy
     agent: fixer
     input: |
-      Push this completed bugfix branch.
+      Merge to main, deploy, and verify the live site. One continuous operation.
 
       TASK:
       {{task}}
 
       REPO: {{repo}}
       BRANCH: {{branch}}
+      BUILD_CMD: {{build_cmd}}
+      TEST_CMD: {{test_cmd}}
       COMMIT_SHA: {{commit_sha}}
 
       Instructions:
-      1. cd into {{repo}} and checkout {{branch}}.
-      2. Ensure HEAD matches {{commit_sha}}.
-      3. Push the branch to origin.
-      4. Capture the pushed commit SHA (git rev-parse HEAD).
 
-      Reply with:
-      STATUS: done
-      BRANCH: {{branch}}
-      COMMIT: <full sha>
-      PUSH: <success/failure with short detail>
-    expects: "STATUS: done"
-    on_fail:
-      escalate_to: human
-
-  - id: merge-main
-    agent: fixer
-    input: |
-      Promote this completed bugfix run to main through the serialized merge queue.
-
-      TASK:
-      {{task}}
-
-      RUN_REPO: {{repo}}
-      RUN_BRANCH: {{branch}}
-      BUILD_CMD: {{build_cmd}}
-      TEST_CMD: {{test_cmd}}
-      COMMIT: {{commit}}
-
-      Instructions:
-      1. This step MUST serialize merges to main across concurrent runs.
-      2. Use a file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 minutes).
-      3. Inside the lock, run merge operations in a dedicated queue repo:
+      PHASE 1 — MERGE TO MAIN:
+      1. Serialize merges using file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 min).
+      2. Inside the lock:
          - QUEUE_REPO=/root/.openclaw/workspaces/workflows/feature-dev/merge-queue/the-algo
          - If QUEUE_REPO does not exist, clone /opt/the-algo into QUEUE_REPO
          - git -C QUEUE_REPO fetch origin --prune
-         - git -C QUEUE_REPO checkout main
-         - git -C QUEUE_REPO reset --hard origin/main
-         - Verify origin/{{branch}} exists; fail clearly if missing
+         - git -C QUEUE_REPO checkout main && git -C QUEUE_REPO reset --hard origin/main
+         - Verify origin/{{branch}} exists
          - git -C QUEUE_REPO merge --no-ff --no-edit origin/{{branch}}
-         - Run TEST_CMD in QUEUE_REPO
-         - Run BUILD_CMD in QUEUE_REPO
+         - Run tests and build in QUEUE_REPO
          - git -C QUEUE_REPO push origin main
-         - Capture resulting main SHA via git -C QUEUE_REPO rev-parse HEAD
-      4. If merge conflicts happen, abort merge and return STATUS: retry with clear details.
-      5. If tests/build fail after merge, reset QUEUE_REPO back to origin/main and return STATUS: retry.
+         - Capture MAIN_COMMIT via git -C QUEUE_REPO rev-parse HEAD
+      3. If merge conflicts or test failures: abort, reset to origin/main, return STATUS: retry.
 
-      Reply with:
-      STATUS: done
-      MAIN_COMMIT: <full sha now on origin/main>
-      MERGED_BRANCH: {{branch}}
-      MERGE_RESULT: queued merge succeeded
-
-      Or if blocked:
-      STATUS: retry
-      MERGE_RESULT: <why merge failed>
-    expects: "STATUS: done"
-    on_fail:
-      escalate_to: human
-
-  - id: deploy-live
-    agent: fixer
-    input: |
-      Deploy the merged main commit to the live runtime checkout before smoke.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-
-      Instructions:
-      1. Run:
+      PHASE 2 — DEPLOY:
+      4. Run:
          python3 /root/.openclaw/workspace/antfarm/scripts/deploy-live.py \
            --repo /opt/the-algo \
            --remote origin \
            --branch main \
            --service the-algo \
-           --expected-sha {{main_commit}} \
+           --expected-sha <MAIN_COMMIT> \
            --origin-url http://127.0.0.1:3000 \
            --json-out /tmp/antfarm-deploy-live-{{run_id}}.json
-      2. If script exits 0: return STATUS: done and include DEPLOY_RESULT_JSON.
-      3. If script exits non-zero: return STATUS: retry and include DEPLOY_FAILURE_SIGNATURE, DEPLOY_ERROR_JSON, and ISSUES.
+      5. If deploy fails, return STATUS: retry with details.
 
-      Reply with (success):
-      STATUS: done
-      DEPLOY_RESULT_JSON: <json>
-
-      Or on failure:
-      STATUS: retry
-      DEPLOY_FAILURE_SIGNATURE: <signature>
-      DEPLOY_ERROR_JSON: <json>
-      ISSUES: <short summary>
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: fix
-      max_retries: 2
-      on_exhausted:
-        escalate_to: human
-
-  - id: live-smoke
-    agent: verifier
-    input: |
-      Run live smoke validation after merge-main for this bugfix run.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-      DEPLOY_RESULT_JSON: {{deploy_result_json}}
-
-      Instructions:
-      1. Run:
+      PHASE 3 — LIVE SMOKE:
+      6. Run:
          python3 /root/.openclaw/workspace/antfarm/scripts/live-smoke.py \
            --public-url https://algo2.dangish.net \
            --origin-url http://127.0.0.1:3000 \
            --json-out /tmp/antfarm-live-smoke-{{run_id}}.json
-      2. If script exits 0: return STATUS: done and include SMOKE_RESULT_JSON.
-      3. If script exits non-zero: return STATUS: retry and include SMOKE_FAILURE_SIGNATURE, SMOKE_ERROR_JSON, and ISSUES.
+      7. If smoke fails, return STATUS: retry with details.
 
-      Reply with (success):
+      Reply with:
       STATUS: done
-      SMOKE_RESULT_JSON: <json>
+      MAIN_COMMIT: <full sha on origin/main>
+      MERGED_BRANCH: {{branch}}
+      DEPLOY_RESULT: success
+      SMOKE_RESULT: pass
 
-      Or on failure:
+      Or if any phase fails:
       STATUS: retry
-      SMOKE_FAILURE_SIGNATURE: <signature>
-      SMOKE_ERROR_JSON: <json>
-      ISSUES: <short summary>
+      PHASE_FAILED: merge|deploy|smoke
+      ISSUES: <what went wrong>
     expects: "STATUS: done"
     on_fail:
-      retry_step: fix
-      max_retries: 2
-      on_exhausted:
-        escalate_to: human
+      escalate_to: human
