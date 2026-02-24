@@ -7,7 +7,7 @@ description: |
   Test runs integration/E2E. Deploy merges to main, deploys, and smoke tests.
 
 polling:
-  model: anthropic/claude-sonnet-4-6-20250725
+  model: sonnet
   timeoutSeconds: 120
 
 cron:
