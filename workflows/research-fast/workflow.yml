@@ -6,7 +6,7 @@ description: |
   Verify step independently checks completeness and consistency.
 
 polling:
-  model: anthropic/claude-sonnet-4-20250514
+  model: anthropic/claude-sonnet-4-6-20250725
   timeoutSeconds: 120
 
 cron:
