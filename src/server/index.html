@@ -204,6 +204,25 @@ select:focus{outline:none;border-color:#8ECFC0}
 .medic-check-row:last-child{border-bottom:none}
 .medic-check-time{color:var(--text-secondary);font-family:'Geist Mono',monospace}
 .medic-check-summary{color:var(--text-primary);margin-left:8px}
+
+/* ── Workers panel ────────────────────────────────────────────── */
+.workers-badge{display:flex;align-items:center;gap:6px;font-size:12px;color:rgba(255,255,255,.85);cursor:pointer;padding:4px 10px;border:1px solid rgba(255,255,255,.15);border-radius:6px;background:transparent;transition:border-color .15s,background .15s}
+.workers-badge:hover{border-color:rgba(255,255,255,.4);background:rgba(255,255,255,.05)}
+.workers-panel{position:fixed;top:60px;right:360px;width:480px;max-height:600px;background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 8px 32px var(--shadow-heavy);z-index:50;overflow:hidden;display:none;flex-direction:column}
+.workers-panel.open{display:flex}
+.workers-panel-header{padding:14px 16px;border-bottom:1px solid var(--border-light);font-size:14px;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px}
+.workers-panel-body{padding:12px 16px;overflow-y:auto;flex:1}
+.worker-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-light);font-size:12px}
+.worker-row:last-child{border-bottom:none}
+.worker-info{flex:1;display:flex;flex-direction:column;gap:2px}
+.worker-pid{font-family:'Geist Mono',monospace;color:var(--accent-teal);font-size:11px}
+.worker-role{font-weight:500;color:var(--text-primary)}
+.worker-elapsed{color:var(--text-secondary);font-size:11px}
+.worker-actions{display:flex;gap:6px}
+.worker-btn{font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-alt);color:var(--text-primary);cursor:pointer;transition:border-color .15s}
+.worker-btn:hover{border-color:var(--accent-orange)}
+.worker-btn.kill{color:var(--accent-orange);border-color:var(--accent-orange-subtle)}
+.worker-log-view{margin-top:8px;padding:8px;background:var(--bg-code);border:1px solid var(--border);border-radius:4px;font-family:'Geist Mono',monospace;font-size:10px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;color:var(--text-tertiary)}
 </style>
 </head>
 <body>
@@ -211,6 +230,9 @@ select:focus{outline:none;border-color:#8ECFC0}
   <h1><span>antfarm</span> dashboard</h1>
   <select id="wf-select"><option value="">Loading...</option></select>
   <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">☀️</button>
+  <div class="workers-badge" id="workers-badge" onclick="toggleWorkersPanel()" title="Active PTY workers">
+    <span id="workers-count">Workers: 0</span>
+  </div>
   <div class="medic-badge" id="medic-badge" onclick="toggleMedicPanel()" title="Medic watchdog status">
     <span class="medic-dot unknown" id="medic-dot"></span>
     <span id="medic-label">Medic</span>
@@ -218,6 +240,10 @@ select:focus{outline:none;border-color:#8ECFC0}
   <span class="refresh-note" id="refresh-note">Auto-refresh: 30s</span>
 </header>
 <div class="board" id="board"><div class="empty" style="margin:auto">Select a workflow</div></div>
+<div class="workers-panel" id="workers-panel">
+  <div class="workers-panel-header">PTY Workers</div>
+  <div class="workers-panel-body" id="workers-panel-body">Loading...</div>
+</div>
 <div class="medic-panel" id="medic-panel">
   <div class="medic-panel-header">Workflow Medic</div>
   <div class="medic-panel-body" id="medic-panel-body">Loading...</div>
@@ -557,6 +583,97 @@ async function loadMedicData() {
 
 loadMedicStatus();
 setInterval(loadMedicStatus, 30000);
+
+// ── Workers ─────────────────────────────────────────────────────
+let workersPanelOpen = false;
+let workersRefreshInterval = null;
+
+function toggleWorkersPanel() {
+  workersPanelOpen = !workersPanelOpen;
+  document.getElementById('workers-panel').classList.toggle('open', workersPanelOpen);
+  if (workersPanelOpen) {
+    loadWorkersData();
+    workersRefreshInterval = setInterval(loadWorkersData, 10000);
+  } else {
+    if (workersRefreshInterval) { clearInterval(workersRefreshInterval); workersRefreshInterval = null; }
+  }
+}
+
+document.addEventListener('click', e => {
+  if (!workersPanelOpen) return;
+  const panel = document.getElementById('workers-panel');
+  const badge = document.getElementById('workers-badge');
+  if (!panel.contains(e.target) && !badge.contains(e.target)) {
+    workersPanelOpen = false;
+    panel.classList.remove('open');
+    if (workersRefreshInterval) { clearInterval(workersRefreshInterval); workersRefreshInterval = null; }
+  }
+});
+
+async function loadWorkersCount() {
+  try {
+    const workers = await fetchJSON('/api/workers');
+    document.getElementById('workers-count').textContent = `Workers: ${workers.length}`;
+  } catch {
+    document.getElementById('workers-count').textContent = 'Workers: ?';
+  }
+}
+
+async function loadWorkersData() {
+  const body = document.getElementById('workers-panel-body');
+  try {
+    const workers = await fetchJSON('/api/workers');
+    document.getElementById('workers-count').textContent = `Workers: ${workers.length}`;
+    if (workers.length === 0) {
+      body.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:8px 0">No active workers.</div>';
+      return;
+    }
+    body.innerHTML = workers.map(w => {
+      const elapsed = Math.round(w.elapsedMs / 1000);
+      const mins = Math.floor(elapsed / 60);
+      const secs = elapsed % 60;
+      return `<div class="worker-row">
+        <div class="worker-info">
+          <div class="worker-role">${esc(w.agentRole)}</div>
+          <div class="worker-pid">PID ${w.pid} &middot; step ${w.stepId.slice(0,8)} &middot; run ${w.runId.slice(0,8)}</div>
+          <div class="worker-elapsed">${mins}m ${secs}s elapsed</div>
+        </div>
+        <div class="worker-actions">
+          <button class="worker-btn" onclick="event.stopPropagation();viewWorkerLog('${w.stepId}')">Log</button>
+          <button class="worker-btn kill" onclick="event.stopPropagation();killWorker('${w.stepId}')">Kill</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch {
+    body.innerHTML = '<div style="color:var(--text-secondary);font-size:12px;padding:8px 0">Could not load workers.</div>';
+  }
+}
+
+async function viewWorkerLog(stepId) {
+  const body = document.getElementById('workers-panel-body');
+  try {
+    const data = await fetchJSON(`/api/workers/${stepId}/log`);
+    body.innerHTML = `<div>
+      <button class="worker-btn" onclick="loadWorkersData()" style="margin-bottom:8px">&larr; Back</button>
+      <div class="worker-log-view">${esc(data.log || '(empty)')}</div>
+    </div>`;
+  } catch {
+    body.innerHTML += '<div style="color:var(--accent-orange);font-size:11px;margin-top:8px">Failed to load log.</div>';
+  }
+}
+
+async function killWorker(stepId) {
+  if (!confirm('Kill this worker?')) return;
+  try {
+    await fetch(`/api/workers/${stepId}/kill`, { method: 'POST' });
+    loadWorkersData();
+  } catch {
+    alert('Failed to kill worker.');
+  }
+}
+
+loadWorkersCount();
+setInterval(loadWorkersCount, 10000);
 
 // ── Theme toggle ──────────────────────────────────────────────────
 (function initTheme() {

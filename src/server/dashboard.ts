@@ -9,6 +9,8 @@ import YAML from "yaml";
 import type { RunInfo, StepInfo } from "../installer/status.js";
 import { getRunEvents } from "../installer/events.js";
 import { getMedicStatus, getRecentMedicChecks } from "../medic/medic.js";
+import { listActiveWorkers, findWorkFileByStepId, getWorkerLogPath, isWorkerAlive, removeWorkFile } from "../installer/worker-state.js";
+import { failStep } from "../installer/step-ops.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -112,6 +114,45 @@ export function startDashboard(port = 3333): http.Server {
     if (p === "/api/medic/checks") {
       const limit = parseInt(url.searchParams.get("limit") ?? "20", 10);
       return json(res, getRecentMedicChecks(limit));
+    }
+
+    // Worker API
+    if (p === "/api/workers") {
+      return json(res, listActiveWorkers());
+    }
+
+    const workerLogMatch = p.match(/^\/api\/workers\/([^/]+)\/log$/);
+    if (workerLogMatch) {
+      const work = findWorkFileByStepId(workerLogMatch[1]);
+      if (!work) return json(res, { error: "not found" }, 404);
+      const logPath = getWorkerLogPath(work.runId, work.stepId);
+      try {
+        const content = fs.readFileSync(logPath, "utf-8");
+        const lines = content.split("\n");
+        const tail = lines.slice(-200).join("\n");
+        return json(res, { log: tail });
+      } catch {
+        return json(res, { log: "(no log file)" });
+      }
+    }
+
+    const workerKillMatch = p.match(/^\/api\/workers\/([^/]+)\/kill$/);
+    if (workerKillMatch && req.method === "POST") {
+      const work = findWorkFileByStepId(workerKillMatch[1]);
+      if (!work) return json(res, { error: "not found" }, 404);
+      if (work.pid && isWorkerAlive(work.pid)) {
+        try { process.kill(work.pid, "SIGTERM"); } catch {}
+        setTimeout(() => {
+          try { process.kill(work.pid!, 0); process.kill(work.pid!, "SIGKILL"); } catch {}
+        }, 3000);
+      }
+      try {
+        failStep(work.stepId, "Worker killed via dashboard");
+      } catch {
+        // step may already be terminal
+      }
+      removeWorkFile(work.runId, work.stepId);
+      return json(res, { ok: true });
     }
 
     // Serve fonts

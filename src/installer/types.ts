@@ -76,12 +76,18 @@ export type Story = {
   maxRetries: number;
 };
 
+export type ExecutionConfig = {
+  mode?: "pty" | "session";  // default 'session'
+  workerTimeoutMinutes?: number;  // default 30
+};
+
 export type WorkflowSpec = {
   id: string;
   name?: string;
   version?: number;
   polling?: PollingConfig;
   cron?: WorkflowCronConfig;
+  execution?: ExecutionConfig;
   agents: WorkflowAgent[];
   steps: WorkflowStep[];
   context?: Record<string, string>;

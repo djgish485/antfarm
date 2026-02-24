@@ -126,6 +126,24 @@ ${workPrompt}
 Reply with a short summary of what you spawned.`;
 }
 
+export function buildPtyPollingPrompt(workflowId: string, agentId: string): string {
+  const fullAgentId = `${workflowId}_${agentId}`;
+  const cli = resolveAntfarmCli();
+
+  return `Step 1 — Quick check for pending work:
+\`\`\`
+node ${cli} step peek "${fullAgentId}"
+\`\`\`
+If output is "NO_WORK", reply HEARTBEAT_OK and stop immediately.
+
+Step 2 — If "HAS_WORK", dispatch a PTY worker:
+\`\`\`
+node ${cli} worker dispatch "${fullAgentId}"
+\`\`\`
+
+Step 3 — Report what happened. If the dispatch output says "Dispatched", reply with that summary. If it says "NO_WORK" or "Worker already running", reply HEARTBEAT_OK.`;
+}
+
 function normalizeEveryMs(workflow: WorkflowSpec): number {
   const rawEveryMs = workflow.cron?.intervalMs ?? (workflow as any).cron?.interval_ms ?? DEFAULT_EVERY_MS;
   const everyMs = Number(rawEveryMs);
@@ -154,10 +172,13 @@ export async function setupAgentCrons(workflow: WorkflowSpec): Promise<void> {
     const cronName = `antfarm/${workflow.id}/${agent.id}`;
     const agentId = `${workflow.id}_${agent.id}`;
 
-    // Two-phase: Phase 1 uses cheap polling model + minimal prompt
+    // Choose prompt based on execution mode
+    const usePty = workflow.execution?.mode === "pty";
     const pollingModel = agent.pollingModel ?? workflowPollingModel;
     const workModel = agent.model; // Phase 2 model (passed to sessions_spawn via prompt)
-    const prompt = buildPollingPrompt(workflow.id, agent.id, workModel);
+    const prompt = usePty
+      ? buildPtyPollingPrompt(workflow.id, agent.id)
+      : buildPollingPrompt(workflow.id, agent.id, workModel);
     const timeoutSeconds = workflowPollingTimeout;
 
     const result = await createAgentCronJob({

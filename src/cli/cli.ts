@@ -101,6 +101,11 @@ function printUsage() {
       "antfarm workflow stop <run-id>        Stop/cancel a running workflow",
       "antfarm workflow ensure-crons <name>  Recreate agent crons for a workflow",
       "",
+      "antfarm worker dispatch <agent-role>    Dispatch a PTY worker for an agent role",
+      "antfarm worker list                     List active PTY workers",
+      "antfarm worker kill <step-id>           Kill a PTY worker and fail the step",
+      "antfarm worker log <step-id>            Show recent worker log output",
+      "",
       "antfarm cleanup [--dry-run]             Clean workspaces for completed/cancelled/failed runs",
       "",
       "antfarm dashboard [start] [--port N]   Start dashboard daemon (default: 3333)",
@@ -358,6 +363,75 @@ async function main() {
       return;
     }
 
+    printUsage();
+    process.exit(1);
+  }
+
+  if (group === "worker") {
+    if (action === "dispatch") {
+      if (!target) { process.stderr.write("Missing agent-role.\n"); process.exit(1); }
+      const { dispatchWorker } = await import("./worker-dispatch.js");
+      const timeoutArg = args.indexOf("--timeout");
+      const timeoutSec = timeoutArg !== -1 ? parseInt(args[timeoutArg + 1], 10) : undefined;
+      const result = dispatchWorker(target, timeoutSec);
+      if (!result.dispatched) {
+        process.stdout.write(`${result.reason ?? "NO_WORK"}\n`);
+      } else {
+        process.stdout.write(`Dispatched PTY worker for step ${result.stepId!.slice(0, 8)} (PID ${result.pid})\n`);
+      }
+      return;
+    }
+    if (action === "list") {
+      const { listActiveWorkers } = await import("../installer/worker-state.js");
+      const workers = listActiveWorkers();
+      if (workers.length === 0) { console.log("No active workers."); return; }
+      console.log(`Active workers (${workers.length}):`);
+      for (const w of workers) {
+        const elapsed = Math.round(w.elapsedMs / 1000);
+        const mins = Math.floor(elapsed / 60);
+        const secs = elapsed % 60;
+        console.log(`  PID ${String(w.pid).padEnd(7)} step=${w.stepId.slice(0, 8)}  run=${w.runId.slice(0, 8)}  ${w.agentRole.padEnd(20)}  ${mins}m${secs}s`);
+      }
+      return;
+    }
+    if (action === "kill") {
+      if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); }
+      const { findWorkFileByStepId, isWorkerAlive, removeWorkFile } = await import("../installer/worker-state.js");
+      const work = findWorkFileByStepId(target);
+      if (!work) { process.stderr.write(`No work file found for step ${target}\n`); process.exit(1); }
+      if (work.pid && isWorkerAlive(work.pid)) {
+        try { process.kill(work.pid, "SIGTERM"); } catch {}
+        // Wait briefly then SIGKILL
+        await new Promise(r => setTimeout(r, 3000));
+        try { process.kill(work.pid, 0); process.kill(work.pid, "SIGKILL"); } catch {}
+      }
+      try {
+        failStep(work.stepId, "Worker killed manually via CLI");
+      } catch (err) {
+        // step may already be in a terminal state
+      }
+      removeWorkFile(work.runId, work.stepId);
+      console.log(`Killed worker for step ${work.stepId.slice(0, 8)} (PID ${work.pid ?? "unknown"})`);
+      return;
+    }
+    if (action === "log") {
+      if (!target) { process.stderr.write("Missing step-id.\n"); process.exit(1); }
+      const { findWorkFileByStepId, getWorkerLogPath } = await import("../installer/worker-state.js");
+      const work = findWorkFileByStepId(target);
+      if (!work) { process.stderr.write(`No work file found for step ${target}\n`); process.exit(1); }
+      const logPath = getWorkerLogPath(work.runId, work.stepId);
+      try {
+        const content = (await import("node:fs")).readFileSync(logPath, "utf-8");
+        const lines = content.split("\n");
+        const tail = lines.slice(-50).join("\n");
+        process.stdout.write(tail + "\n");
+      } catch {
+        process.stderr.write(`No log file found at ${logPath}\n`);
+        process.exit(1);
+      }
+      return;
+    }
+    process.stderr.write(`Unknown worker action: ${action}\n`);
     printUsage();
     process.exit(1);
   }
