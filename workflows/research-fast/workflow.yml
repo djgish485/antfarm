@@ -1,9 +1,9 @@
 id: research-fast
-name: Fast Research Workflow
-version: 1
+name: Fast Research
+version: 2
 description: |
-  Lightweight research pipeline for quick investigation tasks.
-  Steps: research -> synthesize -> verify.
+  Lightweight research pipeline. Research step investigates and synthesizes.
+  Verify step independently checks completeness and consistency.
 
 polling:
   model: anthropic/claude-sonnet-4-20250514
@@ -20,7 +20,7 @@ agents:
   - id: rfresearch
     name: Researcher
     role: analysis
-    description: Collects concrete findings and evidence for the task.
+    description: Investigates the task, collects evidence, and synthesizes findings into conclusions.
     workspace:
       baseDir: agents/researcher
       files:
@@ -28,21 +28,10 @@ agents:
         SOUL.md: agents/researcher/SOUL.md
         IDENTITY.md: agents/researcher/IDENTITY.md
 
-  - id: rfsynthesize
-    name: Synthesizer
-    role: analysis
-    description: Turns findings into concise conclusions and recommended actions.
-    workspace:
-      baseDir: agents/synthesizer
-      files:
-        AGENTS.md: agents/synthesizer/AGENTS.md
-        SOUL.md: agents/synthesizer/SOUL.md
-        IDENTITY.md: agents/synthesizer/IDENTITY.md
-
   - id: rfverify
     name: Verifier
     role: verification
-    description: Checks output completeness and internal consistency.
+    description: Independently checks research output for completeness and consistency.
     workspace:
       baseDir: agents/verifier
       files:
@@ -54,59 +43,27 @@ steps:
   - id: research
     agent: rfresearch
     input: |
-      Research this task and collect evidence-backed findings.
+      Research this task thoroughly: investigate, collect evidence, and synthesize into conclusions.
 
       TASK:
       {{task}}
 
       Instructions:
       1. Investigate directly in the target repo/system as requested.
-      2. Use concrete evidence (commands, logs, code references).
-      3. Keep findings concise and factual.
-      4. Do not invent data.
+      2. Use concrete evidence (commands, logs, code references). Do not invent data.
+      3. After collecting findings, synthesize them into clear conclusions.
+      4. Separate confirmed facts from assumptions.
+      5. Produce actionable recommendations.
 
-      Output contract (strict):
       Reply with:
       STATUS: done
       FINDINGS:
-      - bullet findings
-      EVIDENCE:
-      - command/log/code refs
-      RISKS:
-      - optional bullets (or "none")
-    expects: "STATUS: done"
-    max_retries: 2
-    on_fail:
-      escalate_to: human
-
-  - id: synthesize
-    agent: rfsynthesize
-    input: |
-      Synthesize the research findings into clear conclusions and next actions.
-
-      TASK:
-      {{task}}
-
-      FINDINGS:
-      {{findings}}
-
-      EVIDENCE:
-      {{evidence}}
-
-      RISKS:
-      {{risks}}
-
-      Instructions:
-      1. Preserve factual accuracy.
-      2. Separate confirmed facts from assumptions.
-      3. Produce actionable recommendations.
-
-      Output contract (strict):
-      Reply with:
-      STATUS: done
-      SUMMARY: concise synthesis
+      - bullet findings with evidence
+      SUMMARY: concise synthesis of what was found
       RECOMMENDATIONS:
       - ordered action bullets
+      RISKS:
+      - optional bullets (or "none")
       ASSUMPTIONS:
       - optional bullets (or "none")
     expects: "STATUS: done"
@@ -117,7 +74,7 @@ steps:
   - id: verify
     agent: rfverify
     input: |
-      Verify completeness and consistency of synthesized research output.
+      Verify completeness and consistency of this research output. You did NOT do the research.
 
       TASK:
       {{task}}
@@ -132,15 +89,22 @@ steps:
       {{assumptions}}
 
       Instructions:
-      1. Confirm required output fields are present and non-empty.
-      2. Confirm recommendations align with summary.
-      3. Flag contradictions or missing critical details.
+      1. Confirm all required fields are present and non-empty.
+      2. Confirm recommendations align with the summary and findings.
+      3. Flag contradictions, missing critical details, or unsupported claims.
+      4. If the research is incomplete, specify exactly what's missing.
 
-      Output contract (strict):
-      Reply with:
+      Reply with (if complete):
       STATUS: done
       VERIFIED: what was checked and final verdict
+
+      Or if issues found:
+      STATUS: retry
+      ISSUES:
+      - what needs to be re-researched or corrected
     expects: "STATUS: done"
-    max_retries: 2
     on_fail:
-      escalate_to: human
+      retry_step: research
+      max_retries: 2
+      on_exhausted:
+        escalate_to: human

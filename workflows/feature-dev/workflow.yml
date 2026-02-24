@@ -1,13 +1,10 @@
-# Ralph loop (https://github.com/snarktank/ralph) — each agent runs in a fresh
-# session with clean context. Memory persists via git history and progress files.
 id: feature-dev
-name: Feature Development Workflow
-version: 8
+name: Feature Development
+version: 9
 description: |
-  Story-based execution pipeline. Planner decomposes tasks into user stories.
-  Setup prepares the environment and establishes baseline.
-  Developer implements each story (with tests) in a fresh session. Verifier checks each story.
-  Then integration/E2E testing, PR creation, and code review.
+  Feature development pipeline. Plan decomposes into stories.
+  Implement loops through stories with per-story verification.
+  Test runs integration/E2E. Deploy merges to main, deploys, and smoke tests.
 
 polling:
   model: anthropic/claude-sonnet-4-20250514
@@ -32,21 +29,10 @@ agents:
         SOUL.md: agents/planner/SOUL.md
         IDENTITY.md: agents/planner/IDENTITY.md
 
-  - id: setup
-    name: Setup
-    role: coding
-    description: Prepares environment, creates branch, establishes baseline.
-    workspace:
-      baseDir: agents/setup
-      files:
-        AGENTS.md: ../../agents/shared/setup/AGENTS.md
-        SOUL.md: ../../agents/shared/setup/SOUL.md
-        IDENTITY.md: ../../agents/shared/setup/IDENTITY.md
-
   - id: developer
     name: Developer
     role: coding
-    description: Implements features, writes tests, creates PRs.
+    description: Implements stories, writes tests, commits.
     workspace:
       baseDir: agents/developer
       files:
@@ -57,7 +43,7 @@ agents:
   - id: verifier
     name: Verifier
     role: verification
-    description: Quick sanity check - did developer actually do the work?
+    description: Independently verifies each story and runs integration tests.
     workspace:
       baseDir: agents/verifier
       skills:
@@ -67,110 +53,43 @@ agents:
         SOUL.md: ../../agents/shared/verifier/SOUL.md
         IDENTITY.md: ../../agents/shared/verifier/IDENTITY.md
 
-  - id: tester
-    name: Tester
-    role: testing
-    description: Integration and E2E testing after all stories are implemented.
-    workspace:
-      baseDir: agents/tester
-      skills:
-        - agent-browser
-      files:
-        AGENTS.md: agents/tester/AGENTS.md
-        SOUL.md: agents/tester/SOUL.md
-        IDENTITY.md: agents/tester/IDENTITY.md
-
-  - id: reviewer
-    name: Reviewer
-    role: analysis
-    description: Reviews PRs, requests changes or approves.
-    workspace:
-      baseDir: agents/reviewer
-      skills:
-        - agent-browser
-      files:
-        AGENTS.md: agents/reviewer/AGENTS.md
-        SOUL.md: agents/reviewer/SOUL.md
-        IDENTITY.md: agents/reviewer/IDENTITY.md
-
 steps:
   - id: plan
     agent: planner
     input: |
-      Decompose the following task into ordered user stories for autonomous execution.
+      Decompose this task into user stories AND set up the development environment.
 
       TASK:
       {{task}}
 
       Instructions:
-      1. Explore the codebase to understand the stack, conventions, and patterns
-      2. Break the task into small user stories (max 20)
-      3. Order by dependency: schema/DB first, backend, frontend, integration
-      4. Each story must fit in one developer session (one context window)
-      5. Every acceptance criterion must be mechanically verifiable
-      6. Always include "Typecheck passes" as the last criterion in every story
-      7. Every story MUST include test criteria — "Tests for [feature] pass"
-      8. The developer is expected to write tests as part of each story
-      9. Determine REPO path from task text (fallback: /opt/the-algo).
-      10. Resolve BRANCH deterministically:
-         - If REPO is /opt/the-algo, BRANCH MUST be main.
-         - For other repos, use the repo current branch unless task explicitly requires another.
-      11. Ignore branch names in task text when they conflict with this policy.
-      12. For /opt/the-algo, never use any branch except main.
+
+      PHASE 1 — EXPLORE & PLAN:
+      1. Explore the codebase to understand stack, conventions, and patterns.
+      2. Break the task into small user stories (max 20).
+      3. Order by dependency: schema/DB first, backend, frontend, integration.
+      4. Each story must fit in one developer session.
+      5. Every acceptance criterion must be mechanically verifiable.
+      6. Every story MUST include test criteria and "Typecheck passes."
+
+      PHASE 2 — SETUP:
+      7. Determine REPO path from task (default /opt/the-algo).
+      8. For /opt/the-algo: BRANCH MUST be main.
+      9. Resolve isolated run workspace:
+         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+         - RUN_BRANCH=feature-dev-{{run_id}}
+         - Fetch origin, create worktree at RUN_REPO branched from origin/main
+      10. Ensure .gitignore exists (must include .env, node_modules/, *.key, *.pem).
+      11. Run build and tests to establish baseline.
 
       Reply with:
       STATUS: done
-      REPO: /path/to/repo
-      BRANCH: resolved branch name
-      STORIES_JSON: [ ... array of story objects ... ]
-    expects: "STATUS: done"
-    max_retries: 2
-    on_fail:
-      escalate_to: human
-
-  - id: setup
-    agent: setup
-    input: |
-      Prepare the development environment for this feature.
-
-      TASK:
-      {{task}}
-
-      REPO: {{repo}}
-      BRANCH: {{branch}}
-
-      Instructions:
-      1. For /opt/the-algo, force BRANCH=main and treat main as the BASE branch.
-      2. Resolve an isolated run workspace to avoid cross-run collisions:
-         - If REPO is /opt/the-algo, set RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - Set RUN_BRANCH=feature-dev-{{run_id}}
-         - Ensure /opt/the-algo is fetched (`git -C /opt/the-algo fetch origin`)
-         - Create or reuse isolated worktree at RUN_REPO and branch RUN_BRANCH from origin/main
-         - Use RUN_REPO as REPO and RUN_BRANCH as BRANCH for the rest of the run
-      3. For non-/opt/the-algo repos, keep REPO={{repo}} and BRANCH={{branch}} unless task says otherwise.
-         For /opt/the-algo, use RUN_REPO and RUN_BRANCH for the rest of the run and never write code in /opt/the-algo.
-      4. cd into resolved REPO and ensure active branch is resolved BRANCH.
-      5. Read package.json, CI config, test config to understand the build/test setup
-      6. Ensure .gitignore exists — if missing, create one appropriate for the detected stack (must include .env, node_modules/, *.key, *.pem at minimum)
-      7. Run the build to establish a baseline
-      8. Run the tests to establish a baseline
-      9. Report what you found.
-      10. Output contract is mandatory: ALWAYS include REPO, BRANCH, BUILD_CMD, TEST_CMD, CI_NOTES, BASELINE.
-      11. Deterministic fallbacks when unknown:
-         - For /opt/the-algo tasks: REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo and BRANCH=feature-dev-{{run_id}}
-         - BUILD_CMD=npm run build
-         - TEST_CMD=npm test
-         - CI_NOTES=none found
-         - BASELINE=one-line pass/fail summary
-
-      Reply with:
-      STATUS: done
-      REPO: <resolved repo path>
+      REPO: <resolved run workspace path>
       BRANCH: <resolved branch name>
       BUILD_CMD: <build command>
       TEST_CMD: <test command>
-      CI_NOTES: <brief CI notes>
       BASELINE: <baseline status>
+      STORIES_JSON: [ ... array of story objects ... ]
     expects: "STATUS: done"
     max_retries: 2
     on_fail:
@@ -186,7 +105,7 @@ steps:
       verify_each: true
       verify_step: verify
     input: |
-      Implement the following user story. You are working on ONE story in a fresh session.
+      Implement this ONE user story in a fresh session.
 
       TASK (overall):
       {{task}}
@@ -211,21 +130,13 @@ steps:
       {{progress}}
 
       Instructions:
-      1. Normalize execution target before coding:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If REPO is /opt/the-algo, missing, or not RUN_REPO, set REPO=RUN_REPO.
-         - If BRANCH is missing or equals main for /opt/the-algo work, set BRANCH=RUN_BRANCH.
-         - If BUILD_CMD/TEST_CMD are missing, use npm run build / npm test.
-      2. Read progress-{{run_id}}.txt — especially the Codebase Patterns section.
-      3. Ensure you are on the normalized BRANCH in the normalized REPO; if an upstream exists, pull --ff-only, otherwise continue.
-      4. Implement this story only.
-      5. Write tests for this story's functionality.
-      6. Run typecheck / build.
-      7. Run tests to confirm they pass.
-      8. Commit: feat: {{current_story_id}} - {{current_story_title}}.
-      9. Append to progress-{{run_id}}.txt.
-      10. Update Codebase Patterns if you found reusable patterns.
+      1. Normalize: if REPO is /opt/the-algo or missing, use /root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+      2. cd into REPO, checkout BRANCH, pull if upstream exists.
+      3. Read progress-{{run_id}}.txt for patterns and context.
+      4. Implement this story only. Write tests for it.
+      5. Run build and test commands.
+      6. Commit: feat: {{current_story_id}} - {{current_story_title}}
+      7. Update progress-{{run_id}}.txt.
 
       Reply with:
       STATUS: done
@@ -239,14 +150,13 @@ steps:
   - id: verify
     agent: verifier
     input: |
-      Verify the developer's work on this story.
+      Verify the developer's work on this story. You did NOT write this code.
 
       TASK (overall):
       {{task}}
 
       REPO: {{repo}}
       BRANCH: {{branch}}
-      CHANGES: {{changes}}
       TEST_CMD: {{test_cmd}}
 
       CURRENT STORY:
@@ -255,82 +165,23 @@ steps:
       PROGRESS LOG:
       {{progress}}
 
-      Check:
-      0. Normalize execution target:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO and BRANCH=RUN_BRANCH.
-         - If TEST_CMD is missing, use npm test.
-      1. Code exists (not just TODOs or placeholders)
-      2. Each acceptance criterion for the story is met
-      3. Tests were written for this story's functionality
-      4. Tests pass (run {{test_cmd}})
-      5. No obvious incomplete work
-      6. Typecheck passes
-
-      ## Visual Verification (Frontend Changes)
-      Has frontend changes: {{has_frontend_changes}}
-
-      If {{has_frontend_changes}} is 'true', perform lightweight visual verification only:
-      1. Prefer deterministic code+test checks first; do NOT block the step on long-lived dev servers.
-      2. If a quick render check is possible, capture one screenshot and include PASS/FAIL notes.
-      3. If runtime data/env prevents a reliable visual check, explicitly note "VISUAL_CHECK_SKIPPED: <reason>" and continue.
-      4. Never leave processes running after verification.
-
-      If {{has_frontend_changes}} is 'false', skip visual verification.
+      Instructions:
+      1. Normalize: if REPO is /opt/the-algo or missing, use /root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+      2. Check that code exists (not just TODOs or placeholders).
+      3. Verify each acceptance criterion for this story.
+      4. Confirm tests exist for this story's functionality.
+      5. Run {{test_cmd}} — all tests must pass.
+      6. Run typecheck.
+      7. If frontend changes: do a quick browser smoke via puppeteer-core + /snap/bin/chromium against http://127.0.0.1:3000 if possible. Skip if unavailable.
 
       Reply with:
       STATUS: done
-      VERIFIED: What you confirmed
-
-      Or if incomplete:
-      STATUS: retry
-      ISSUES:
-      - What's missing or incomplete
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: implement
-      max_retries: 2
-      on_exhausted:
-        escalate_to: human
-
-  - id: test
-    agent: tester
-    input: |
-      Integration and E2E testing of the implementation.
-
-      TASK:
-      {{task}}
-
-      REPO: {{repo}}
-      BRANCH: {{branch}}
-      CHANGES: {{changes}}
-      BUILD_CMD: {{build_cmd}}
-      TEST_CMD: {{test_cmd}}
-
-      PROGRESS LOG:
-      {{progress}}
-
-      Your job (integration/E2E testing — unit tests were already written per-story):
-      0. Normalize execution target:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO and BRANCH=RUN_BRANCH.
-         - If BUILD_CMD/TEST_CMD are missing, use npm run build / npm test.
-      1. Run the full test suite ({{test_cmd}}) to confirm everything passes together.
-      2. Look for integration issues between stories.
-      3. If this changes frontend/UI behavior, run agent-browser sanity flow: load app, open one feed item, verify post detail renders without an application error, and if source chips/filters are present click one and verify UI response. If browser tooling is unavailable, return STATUS: retry with FAILURES explaining why.
-      4. Check cross-cutting concerns: error handling, edge cases across features.
-      5. Verify the overall feature works as a cohesive whole.
-
-      Reply with:
-      STATUS: done
-      RESULTS: What you tested and the outcomes
+      VERIFIED: what was confirmed
 
       Or if issues found:
       STATUS: retry
-      FAILURES:
-      - Specific test failures or bugs found
+      ISSUES:
+      - what's missing or incomplete
     expects: "STATUS: done"
     on_fail:
       retry_step: implement
@@ -338,50 +189,10 @@ steps:
       on_exhausted:
         escalate_to: human
 
-
-  - id: ship
+  - id: deploy
     agent: developer
     input: |
-      Finalize and deliver directly to the branch (NO PR MODE).
-
-      TASK:
-      {{task}}
-
-      REPO: {{repo}}
-      BRANCH: {{branch}}
-      CHANGES: {{changes}}
-      RESULTS: {{results}}
-
-      PROGRESS LOG:
-      {{progress}}
-
-      Instructions:
-      1. Normalize execution target:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO.
-         - If BRANCH is missing or equals main for /opt/the-algo work, use BRANCH=RUN_BRANCH.
-      2. cd into the normalized REPO and checkout the normalized BRANCH.
-      3. Ensure all intended changes are committed.
-      4. Push the branch to origin.
-      5. Capture the current commit SHA (`git rev-parse HEAD`).
-      6. Do NOT open or reference pull requests.
-
-      Reply with:
-      STATUS: done
-      MODE: direct-branch
-      BRANCH: feature-dev-{{run_id}}
-      COMMIT: <full sha>
-      PUSH: <success/failure with short detail>
-      SUMMARY: <concise summary of what shipped>
-    expects: "STATUS: done"
-    on_fail:
-      escalate_to: human
-
-  - id: stabilize
-    agent: developer
-    input: |
-      Apply a focused stabilization patch when post-merge smoke reports a regression.
+      Push, merge to main, deploy, and verify. One continuous operation.
 
       TASK:
       {{task}}
@@ -390,189 +201,45 @@ steps:
       BRANCH: {{branch}}
       BUILD_CMD: {{build_cmd}}
       TEST_CMD: {{test_cmd}}
-      SMOKE_ERROR_JSON: {{smoke_error_json}}
-      RETRY_FEEDBACK: {{retry_feedback}}
 
       Instructions:
-      1. Normalize execution target:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If REPO is /opt/the-algo, missing, or not RUN_REPO, use REPO=RUN_REPO.
-         - If BRANCH is missing or equals main for /opt/the-algo work, use BRANCH=RUN_BRANCH.
-      2. If SMOKE_ERROR_JSON is missing/empty, do not change code; reply STATUS: done with CHANGES=no stabilization needed.
-      3. If SMOKE_ERROR_JSON is present, implement the smallest fix that directly addresses the smoke failure.
-      4. Run TEST_CMD and BUILD_CMD after the fix.
-      5. Commit the stabilization patch.
 
-      Reply with:
-      STATUS: done
-      CHANGES: what was stabilized (or "no stabilization needed")
-      TESTS: what was run and result
-      COMMIT: <full sha after stabilization>
-    expects: "STATUS: done"
-    on_fail:
-      escalate_to: human
+      PHASE 1 — PUSH:
+      1. Normalize: if REPO is /opt/the-algo or missing, use /root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
+      2. cd into REPO, ensure all changes committed, push branch to origin.
 
-  - id: merge-main
-    agent: developer
-    input: |
-      Promote this completed feature run to main through the serialized merge queue.
-
-      TASK:
-      {{task}}
-
-      RUN_REPO: {{repo}}
-      RUN_BRANCH: {{branch}}
-      BUILD_CMD: {{build_cmd}}
-      TEST_CMD: {{test_cmd}}
-      COMMIT: {{commit}}
-
-      Instructions:
-      1. Normalize run inputs:
-         - RUN_REPO=/root/.openclaw/workspaces/workflows/feature-dev/runs/{{run_id}}/the-algo
-         - RUN_BRANCH=feature-dev-{{run_id}}
-         - If provided RUN_REPO is /opt/the-algo, missing, or not RUN_REPO, use RUN_REPO from above.
-         - If provided RUN_BRANCH is missing or equals main, use RUN_BRANCH from above.
-      2. This step MUST serialize merges to main across concurrent runs.
-      3. Use a file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 minutes).
-      4. Inside the lock, run merge operations in a dedicated queue repo:
+      PHASE 2 — MERGE TO MAIN:
+      3. Use file lock at /root/.openclaw/antfarm/locks/merge-main.lock (wait up to 30 min).
+      4. Inside lock:
          - QUEUE_REPO=/root/.openclaw/workspaces/workflows/feature-dev/merge-queue/the-algo
-         - If QUEUE_REPO does not exist, clone /opt/the-algo into QUEUE_REPO
-         - git -C QUEUE_REPO fetch origin --prune
-         - git -C QUEUE_REPO checkout main
-         - git -C QUEUE_REPO reset --hard origin/main
-         - Verify origin/feature-dev-{{run_id}} exists; fail clearly if missing
-         - git -C QUEUE_REPO merge --no-ff --no-edit origin/feature-dev-{{run_id}}
-         - Run TEST_CMD in QUEUE_REPO
-         - Run BUILD_CMD in QUEUE_REPO
-         - git -C QUEUE_REPO push origin main
-         - Capture resulting main SHA via git -C QUEUE_REPO rev-parse HEAD
-      5. If merge conflicts happen, abort merge and return STATUS: retry with clear details.
-      6. If tests/build fail after merge, reset QUEUE_REPO back to origin/main and return STATUS: retry.
+         - If QUEUE_REPO doesn't exist, clone /opt/the-algo
+         - Fetch, reset to origin/main
+         - Merge origin/feature-dev-{{run_id}} --no-ff
+         - Run tests and build in QUEUE_REPO
+         - Push to origin main
+         - Capture MAIN_COMMIT SHA
+      5. If conflicts or test failures: abort, reset, return STATUS: retry.
+
+      PHASE 3 — DEPLOY:
+      6. Run deploy-live.py with --expected-sha <MAIN_COMMIT> --origin-url http://127.0.0.1:3000
+      7. If deploy fails, return STATUS: retry.
+
+      PHASE 4 — SMOKE:
+      8. Run live-smoke.py with --public-url https://algo2.dangish.net --origin-url http://127.0.0.1:3000
+      9. If available, also run a browser smoke: puppeteer-core + /snap/bin/chromium against http://127.0.0.1:3000
+         - Confirm feed renders, click one item, verify no "Application error"
+      10. If smoke fails, return STATUS: retry.
 
       Reply with:
       STATUS: done
-      MAIN_COMMIT: <full sha now on origin/main>
-      MERGED_BRANCH: feature-dev-{{run_id}}
-      MERGE_RESULT: queued merge succeeded
+      MAIN_COMMIT: <full sha>
+      DEPLOY_RESULT: success
+      SMOKE_RESULT: pass
 
-      Or if blocked:
+      Or if any phase fails:
       STATUS: retry
-      MERGE_RESULT: <why merge failed>
+      PHASE_FAILED: push|merge|deploy|smoke
+      ISSUES: <what went wrong>
     expects: "STATUS: done"
     on_fail:
       escalate_to: human
-
-  - id: deploy-live
-    agent: developer
-    input: |
-      Deploy the merged main commit to the live runtime checkout before smoke.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-
-      Instructions:
-      1. Run:
-         python3 /root/.openclaw/workspace/antfarm/scripts/deploy-live.py \
-           --repo /opt/the-algo \
-           --remote origin \
-           --branch main \
-           --service the-algo \
-           --expected-sha {{main_commit}} \
-           --origin-url http://127.0.0.1:3000 \
-           --json-out /tmp/antfarm-deploy-live-{{run_id}}.json
-      2. If script exits 0: return STATUS: done and include DEPLOY_RESULT_JSON.
-      3. If script exits non-zero: return STATUS: retry and include DEPLOY_FAILURE_SIGNATURE, DEPLOY_ERROR_JSON, and ISSUES.
-
-      Reply with (success):
-      STATUS: done
-      DEPLOY_RESULT_JSON: <json>
-
-      Or on failure:
-      STATUS: retry
-      DEPLOY_FAILURE_SIGNATURE: <signature>
-      DEPLOY_ERROR_JSON: <json>
-      ISSUES: <short summary>
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: stabilize
-      max_retries: 2
-      on_exhausted:
-        escalate_to: bug-fix-fast
-
-  - id: browser-smoke
-    agent: verifier
-    input: |
-      Run browser-level smoke validation for the merged deployment.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-
-      Instructions:
-      1. Use agent-browser to open https://algo2.dangish.net (or fallback http://127.0.0.1:3000 if access is blocked in-session).
-      2. Confirm the feed screen renders.
-      3. Click one feed item and confirm post detail opens without "Application error".
-      4. If source chips/filters are present, click one and verify the UI responds (filter state/count/list changes).
-      5. If browser tooling is unavailable, return STATUS: retry with ISSUES describing the tooling failure.
-
-      Reply with (success):
-      STATUS: done
-      BROWSER_SMOKE: pass
-      NOTES: <what was clicked and verified>
-
-      Or on failure:
-      STATUS: retry
-      ISSUES: <short summary>
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: stabilize
-      max_retries: 2
-      on_exhausted:
-        escalate_to: bug-fix-fast
-
-  - id: live-smoke
-    agent: verifier
-    input: |
-      Run live smoke validation for the merged deployment.
-
-      TASK:
-      {{task}}
-
-      MAIN_COMMIT: {{main_commit}}
-      MERGED_BRANCH: {{merged_branch}}
-      DEPLOY_RESULT_JSON: {{deploy_result_json}}
-
-      Instructions:
-      1. Run:
-         python3 /root/.openclaw/workspace/antfarm/scripts/live-smoke.py \
-           --public-url https://algo2.dangish.net \
-           --origin-url http://127.0.0.1:3000 \
-           --json-out /tmp/antfarm-live-smoke-{{run_id}}.json
-      2. If the script exits 0, return STATUS: done and include SMOKE_RESULT_JSON.
-      3. If the script exits non-zero, return STATUS: retry and include:
-         - SMOKE_FAILURE_SIGNATURE: value from failure.failure_signature
-         - SMOKE_ERROR_JSON: full JSON content
-         - ISSUES: one-line summary
-      4. Do not skip this check.
-
-      Reply with (success):
-      STATUS: done
-      SMOKE_RESULT_JSON: <json>
-
-      Or on failure:
-      STATUS: retry
-      SMOKE_FAILURE_SIGNATURE: <signature>
-      SMOKE_ERROR_JSON: <json>
-      ISSUES: <short summary>
-    expects: "STATUS: done"
-    on_fail:
-      retry_step: stabilize
-      max_retries: 2
-      on_exhausted:
-        escalate_to: bug-fix-fast
