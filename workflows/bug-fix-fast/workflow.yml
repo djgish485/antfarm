@@ -8,7 +8,7 @@ description: |
   Uses isolated run worktrees for /opt/the-algo and a serialized merge queue to main.
 
 polling:
-  model: codex
+  model: anthropic/claude-sonnet-4-20250514
   timeoutSeconds: 120
 
 cron:
