@@ -11,7 +11,6 @@ import {
 import { claimStep } from "../installer/step-ops.js";
 import { getDb } from "../db.js";
 
-// PTY worker dispatch test
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

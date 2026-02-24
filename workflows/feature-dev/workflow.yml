@@ -16,6 +16,10 @@ polling:
 cron:
   interval_ms: 60000
 
+execution:
+  mode: pty
+  workerTimeoutMinutes: 30
+
 agents:
   - id: planner
     name: Planner

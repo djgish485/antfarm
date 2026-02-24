@@ -89,14 +89,28 @@ function commandExists(cmd: string): boolean {
 function resolveAgent(agentModel?: string): { cmd: string; args: string[] } {
   const m = agentModel ?? "sonnet";
   if (commandExists("claude")) {
-    return {
-      cmd: "claude",
-      args: [
-        "--allowedTools", "Read,Write,Edit,Bash,Glob,Grep",
-        "--model", m,
-        "-p",
-      ],
-    };
+    const args = [
+      "--allowedTools", [
+        "Read", "Write", "Edit", "Bash", "Glob", "Grep",
+        "WebSearch", "WebFetch",
+        "mcp__playwright_browser_navigate",
+        "mcp__playwright_browser_snapshot",
+        "mcp__playwright_browser_click",
+        "mcp__playwright_browser_type",
+        "mcp__playwright_browser_take_screenshot",
+        "mcp__playwright_browser_wait",
+        "mcp__playwright_browser_tab_list",
+        "mcp__playwright_browser_close",
+      ].join(","),
+      "--model", m,
+    ];
+    // Add MCP config if it exists
+    const mcpConfig = path.join(resolveWorkflowWorkspaceRoot(), "..", "worker-mcp-config.json");
+    if (fs.existsSync(mcpConfig)) {
+      args.push("--mcp-config", mcpConfig);
+    }
+    args.push("-p");
+    return { cmd: "claude", args };
   }
   if (commandExists("codex")) {
     return {

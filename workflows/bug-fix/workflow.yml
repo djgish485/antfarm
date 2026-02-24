@@ -12,6 +12,10 @@ polling:
   model: codex
   timeoutSeconds: 120
 
+execution:
+  mode: pty
+  workerTimeoutMinutes: 30
+
 agents:
   - id: triager
     name: Triager
