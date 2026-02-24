@@ -102,6 +102,7 @@ function resolveAgent(agentModel?: string): { cmd: string; args: string[] } {
         "mcp__playwright_browser_tab_list",
         "mcp__playwright_browser_close",
       ].join(","),
+      "--effort", "high",
       "--model", m,
     ];
     // Add MCP config if it exists
