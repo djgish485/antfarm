@@ -39,15 +39,29 @@ function loadWorkflows(): WorkflowDef[] {
   return results;
 }
 
-function getRuns(workflowId?: string): Array<RunInfo & { steps: StepInfo[] }> {
+function getRuns(workflowId?: string, includeArchived = false): Array<RunInfo & { steps: StepInfo[] }> {
   const db = getDb();
+  const archiveFilter = includeArchived ? "" : " AND archived_at IS NULL";
   const runs = workflowId
-    ? db.prepare("SELECT * FROM runs WHERE workflow_id = ? ORDER BY created_at DESC").all(workflowId) as RunInfo[]
-    : db.prepare("SELECT * FROM runs ORDER BY created_at DESC").all() as RunInfo[];
+    ? db.prepare(`SELECT * FROM runs WHERE workflow_id = ?${archiveFilter} ORDER BY created_at DESC`).all(workflowId) as RunInfo[]
+    : db.prepare(`SELECT * FROM runs WHERE 1=1${archiveFilter} ORDER BY created_at DESC`).all() as RunInfo[];
   return runs.map((r) => {
     const steps = db.prepare("SELECT * FROM steps WHERE run_id = ? ORDER BY step_index ASC").all(r.id) as StepInfo[];
     return { ...r, steps };
   });
+}
+
+/** Archive completed/cancelled/failed runs older than `hours` hours. */
+function archiveOldRuns(hours = 16): { archived: number } {
+  const db = getDb();
+  const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+  const result = db.prepare(
+    `UPDATE runs SET archived_at = datetime('now')
+     WHERE archived_at IS NULL
+       AND status IN ('completed', 'cancelled', 'failed')
+       AND updated_at < ?`
+  ).run(cutoff);
+  return { archived: Number(result.changes) };
 }
 
 function getRunById(id: string): (RunInfo & { steps: StepInfo[] }) | null {
@@ -103,7 +117,13 @@ export function startDashboard(port = 3333): http.Server {
 
     if (p === "/api/runs") {
       const wf = url.searchParams.get("workflow") ?? undefined;
-      return json(res, getRuns(wf));
+      const includeArchived = url.searchParams.get("archived") === "true";
+      return json(res, getRuns(wf, includeArchived));
+    }
+
+    if (p === "/api/runs/archive") {
+      const hours = parseInt(url.searchParams.get("hours") ?? "16", 10);
+      return json(res, archiveOldRuns(hours));
     }
 
     // Medic API
@@ -134,6 +154,20 @@ export function startDashboard(port = 3333): http.Server {
       } catch {
         return json(res, { log: "(no log file)" });
       }
+    }
+
+    // Archive/unarchive a single run
+    const archiveRunMatch = p.match(/^\/api\/runs\/([^/]+)\/archive$/);
+    if (archiveRunMatch && req.method === "POST") {
+      const db = getDb();
+      db.prepare("UPDATE runs SET archived_at = datetime('now') WHERE id = ?").run(archiveRunMatch[1]);
+      return json(res, { ok: true });
+    }
+    const unarchiveRunMatch = p.match(/^\/api\/runs\/([^/]+)\/unarchive$/);
+    if (unarchiveRunMatch && req.method === "POST") {
+      const db = getDb();
+      db.prepare("UPDATE runs SET archived_at = NULL WHERE id = ?").run(unarchiveRunMatch[1]);
+      return json(res, { ok: true });
     }
 
     const workerKillMatch = p.match(/^\/api\/workers\/([^/]+)\/kill$/);

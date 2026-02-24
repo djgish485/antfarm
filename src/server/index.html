@@ -222,6 +222,13 @@ select:focus{outline:none;border-color:#8ECFC0}
 .worker-btn{font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-alt);color:var(--text-primary);cursor:pointer;transition:border-color .15s}
 .worker-btn:hover{border-color:var(--accent-orange)}
 .worker-btn.kill{color:var(--accent-orange);border-color:var(--accent-orange-subtle)}
+.archive-toggle{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-secondary);cursor:pointer;margin-left:8px}
+.archive-toggle input{margin:0}
+.btn-archive{font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid var(--border);background:var(--bg-surface-alt);color:var(--text-secondary);cursor:pointer;transition:border-color .15s}
+.btn-archive:hover{border-color:var(--accent-orange);color:var(--text-primary)}
+.archive-btn{cursor:pointer;font-size:12px;opacity:0.6;transition:opacity .15s}
+.archive-btn:hover{opacity:1}
+.card.archived{opacity:0.5}
 .worker-log-view{margin-top:8px;padding:8px;background:var(--bg-code);border:1px solid var(--border);border-radius:4px;font-family:'Geist Mono',monospace;font-size:10px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;color:var(--text-tertiary)}
 </style>
 </head>
@@ -229,6 +236,10 @@ select:focus{outline:none;border-color:#8ECFC0}
 <header>
   <h1><span>antfarm</span> dashboard</h1>
   <select id="wf-select"><option value="">Loading...</option></select>
+  <label class="archive-toggle" title="Show archived runs">
+    <input type="checkbox" id="show-archived" onchange="loadRuns()"> <span>Archived</span>
+  </label>
+  <button class="btn-archive" onclick="archiveOldRuns()" title="Archive completed/cancelled runs older than 16h">🗄️ Archive old</button>
   <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle light/dark mode">☀️</button>
   <div class="workers-badge" id="workers-badge" onclick="toggleWorkersPanel()" title="Active PTY workers">
     <span id="workers-count">Workers: 0</span>
@@ -290,8 +301,30 @@ function selectWorkflow(id) {
 
 async function loadRuns() {
   if (!currentWf) return;
-  const runs = await fetchJSON(`/api/runs?workflow=${currentWf.id}`);
+  const showArchived = document.getElementById('show-archived')?.checked;
+  const qs = `workflow=${currentWf.id}${showArchived ? '&archived=true' : ''}`;
+  const runs = await fetchJSON(`/api/runs?${qs}`);
   renderBoard(currentWf, runs);
+}
+
+async function archiveOldRuns() {
+  const res = await fetchJSON('/api/runs/archive?hours=16');
+  if (res.archived > 0) {
+    alert(`Archived ${res.archived} old run(s)`);
+    loadRuns();
+  } else {
+    alert('Nothing to archive');
+  }
+}
+
+async function archiveRun(runId) {
+  await fetch(`/api/runs/${runId}/archive`, { method: 'POST' });
+  loadRuns();
+}
+
+async function unarchiveRun(runId) {
+  await fetch(`/api/runs/${runId}/unarchive`, { method: 'POST' });
+  loadRuns();
 }
 
 function getActiveStepId(run) {
@@ -324,10 +357,15 @@ function renderBoard(wf, runs) {
           const title = run.task.length > 60 ? run.task.slice(0, 57) + '…' : run.task;
           const runRef = run.run_number ? `#${run.run_number}` : run.id.slice(0, 8);
           const titleWithRef = `[${runRef}] ${title}`;
-          return `<div class="card ${cls}" onclick="openRun('${run.id}')">
+          const archiveBtn = (run.status === 'completed' || run.status === 'cancelled' || run.status === 'failed')
+            ? `<span class="archive-btn" onclick="event.stopPropagation();${run.archived_at ? `unarchiveRun('${run.id}')` : `archiveRun('${run.id}')`}" title="${run.archived_at ? 'Unarchive' : 'Archive'}">${run.archived_at ? '📤' : '🗄️'}</span>`
+            : '';
+          const archivedCls = run.archived_at ? ' archived' : '';
+          return `<div class="card ${cls}${archivedCls}" onclick="openRun('${run.id}')">
             <div class="card-title" title="${run.task.replace(/"/g, '&quot;')}">${titleWithRef}</div>
             <div class="card-meta">
               <span class="badge ${badge}">${run.status}</span>
+              ${archiveBtn}
               <span>${time}</span>
             </div>
           </div>`;

@@ -107,6 +107,7 @@ function printUsage() {
       "antfarm worker log <step-id>            Show recent worker log output",
       "",
       "antfarm cleanup [--dry-run]             Clean workspaces for completed/cancelled/failed runs",
+      "antfarm archive [--hours N]             Archive terminal runs older than N hours (default 16)",
       "",
       "antfarm dashboard [start] [--port N]   Start dashboard daemon (default: 3333)",
       "antfarm dashboard stop                  Stop dashboard daemon",
@@ -240,6 +241,22 @@ async function main() {
     if (cleaned === 0) {
       console.log("Nothing to clean up.");
     }
+    return;
+  }
+
+  if (group === "archive") {
+    const hoursIdx = args.indexOf("--hours");
+    const hours = hoursIdx >= 0 ? parseInt(args[hoursIdx + 1], 10) || 16 : 16;
+    const { getDb } = await import("../db.js");
+    const db = getDb();
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const result = db.prepare(
+      `UPDATE runs SET archived_at = datetime('now')
+       WHERE archived_at IS NULL
+         AND status IN ('completed', 'cancelled', 'failed')
+         AND updated_at < ?`
+    ).run(cutoff);
+    console.log(`Archived ${result.changes} run(s) older than ${hours}h.`);
     return;
   }
 
