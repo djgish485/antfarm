@@ -100,6 +100,21 @@ export function startDashboard(port = 3333): http.Server {
       return json(res, getRunEvents(eventsMatch[1]));
     }
 
+    // Worker log by run + step (persists after worker finishes)
+    const stepLogMatch = p.match(/^\/api\/runs\/([^/]+)\/steps\/([^/]+)\/log$/);
+    if (stepLogMatch) {
+      const [, runId, stepId] = stepLogMatch;
+      const logPath = getWorkerLogPath(runId, stepId);
+      try {
+        const content = fs.readFileSync(logPath, "utf-8");
+        const lines = content.split("\n");
+        const tail = lines.slice(-500).join("\n");
+        return json(res, { log: tail, found: true });
+      } catch {
+        return json(res, { log: "", found: false });
+      }
+    }
+
     const storiesMatch = p.match(/^\/api\/runs\/([^/]+)\/stories$/);
     if (storiesMatch) {
       const db = getDb();

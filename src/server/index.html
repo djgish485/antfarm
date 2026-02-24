@@ -229,6 +229,8 @@ select:focus{outline:none;border-color:#8ECFC0}
 .archive-btn{cursor:pointer;font-size:12px;opacity:0.6;transition:opacity .15s}
 .archive-btn:hover{opacity:1}
 .card.archived{opacity:0.5}
+.step-log-btn{cursor:pointer;font-size:13px;opacity:0.5;transition:opacity .15s}
+.step-log-btn:hover{opacity:1}
 .worker-log-view{margin-top:8px;padding:8px;background:var(--bg-code);border:1px solid var(--border);border-radius:4px;font-family:'Geist Mono',monospace;font-size:10px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;color:var(--text-tertiary)}
 </style>
 </head>
@@ -398,8 +400,10 @@ async function openRun(id) {
         <div class="step-name" style="flex:1">${s.step_id}</div>
         <div class="step-agent">${s.agent_id || ''}</div>
         <div class="step-status"><span class="badge badge-${st}">${st}</span></div>
+        <span class="step-log-btn" onclick="event.stopPropagation();toggleStepLog('${run.id}','${s.id}')" title="View Claude Code log">📋</span>
         ${hasOutput ? '<span class="step-chevron" style="color:var(--text-secondary);font-size:10px;transition:transform .15s;display:inline-block">▶</span>' : ''}
       </div>
+      <div class="step-log-view" id="step-log-${s.id}" style="display:none;padding:0 12px 12px 44px"></div>
       ${hasOutput ? `<div class="step-details" style="display:none;padding:0 12px 12px 44px;font-size:12px;color:var(--text-tertiary);line-height:1.6">
         <details style="margin-top:4px" onclick="event.stopPropagation()"><summary style="font-size:11px;color:var(--text-secondary);cursor:pointer;font-weight:500">Output</summary><pre style="margin-top:6px;padding:8px;background:var(--bg-code);border:1px solid var(--border);border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto">${esc(s.output)}</pre></details>
       </div>` : ''}
@@ -470,6 +474,24 @@ async function loadActivity(runId) {
       <div style="max-height:300px;overflow-y:auto">${rows}</div>
     </div>
   `;
+}
+
+async function toggleStepLog(runId, stepId) {
+  const el = document.getElementById('step-log-' + stepId);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.innerHTML = '<div style="padding:8px;color:var(--text-secondary);font-size:11px">Loading log...</div>';
+  el.style.display = 'block';
+  try {
+    const data = await fetchJSON(`/api/runs/${runId}/steps/${stepId}/log`);
+    if (data.found && data.log) {
+      el.innerHTML = `<pre style="margin:0;padding:8px;background:var(--bg-code);border:1px solid var(--border);border-radius:4px;font-family:'Geist Mono',monospace;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:400px;overflow-y:auto;color:var(--text-tertiary)">${esc(data.log)}</pre>`;
+    } else {
+      el.innerHTML = '<div style="padding:8px;color:var(--text-secondary);font-size:11px;font-style:italic">No Claude Code log for this step (may have used legacy session mode)</div>';
+    }
+  } catch {
+    el.innerHTML = '<div style="padding:8px;color:var(--accent-orange);font-size:11px">Failed to load log</div>';
+  }
 }
 
 function closePanel() {
